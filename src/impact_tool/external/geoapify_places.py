@@ -15,20 +15,19 @@ PLACES_ENDPOINT = "https://api.geoapify.com/v2/places"
 CATEGORY_PRIORITY = {
     "healthcare.hospital": "hospital",
     "healthcare.clinic_or_praxis": "clinic",
-    "healthcare.doctor": "doctors",
     "healthcare.pharmacy": "pharmacy",
     "service.fire_station": "fire_station",
     "service.police": "police",
     "education.school": "school",
-    "education.kindergarten": "kindergarten",
+    "childcare.kindergarten": "kindergarten",
     "commercial.gas": "fuel",
+    "service.vehicle.fuel": "fuel",
     "service.social_facility.shelter": "shelter",
-    "healthcare.ambulance_station": "ambulance_station",
+    "service.ambulance_station": "ambulance_station",
     "public_transport.train": "railway_station",
     "power.substation": "power_substation",
     "power.plant": "power_plant",
-    "production.water": "water_tower",
-    "production.wastewater": "wastewater_plant",
+    "man_made.water_tower": "water_tower",
 }
 
 

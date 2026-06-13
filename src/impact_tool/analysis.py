@@ -54,25 +54,30 @@ def execute_complete_analysis(
         return False
 
     stage(55, "Analiză Dynamic World")
-    if not execute_dynamic_world(state):
+    dynamic_world_ok = execute_dynamic_world(state)
+    if not dynamic_world_ok:
         state.cache_events.append(
             "Avertisment: Dynamic World este indisponibil; analiza SAR continuă."
         )
 
     stage(68, "Încărcare obiective importante")
-    if not execute_important_features(state):
+    important_features_ok = execute_important_features(state)
+    if not important_features_ok:
         state.cache_events.append(
             "Avertisment: obiectivele importante sunt indisponibile momentan."
         )
 
     stage(78, "Interogare OSM țintită și clasificare impact")
-    if not execute_osm_loading(state, progress_callback=progress_callback):
+    osm_ok = execute_osm_loading(state, progress_callback=progress_callback)
+    if not osm_ok:
         state.cache_events.append(
             "Avertisment: impactul OSM este indisponibil; rezultatele raster rămân active."
         )
 
     state.analysis_results["workflow_status"] = (
-        "complet" if state.osm_impact_available else "parțial"
+        "complet"
+        if dynamic_world_ok and important_features_ok and osm_ok
+        else "parțial"
     )
     stage(100, "Analiza completă s-a încheiat")
     return True
@@ -205,8 +210,9 @@ def execute_dynamic_world(
         result["duration_seconds"] = round(perf_counter() - started, 3)
         result["source"] = "Google Dynamic World V1 prin Google Earth Engine"
         state.analysis_results["dynamic_world"] = result
-        state.map_data_revision += 1
-        if result.get("status") == "reușit":
+        succeeded = result.get("status") == "reușit"
+        if succeeded:
+            state.map_data_revision += 1
             if "dynamic_world_new_water" not in state.active_layers:
                 state.active_layers.append("dynamic_world_new_water")
             state.analysis_results.pop("dynamic_world_error", None)
@@ -214,19 +220,26 @@ def execute_dynamic_world(
             state.analysis_results["dynamic_world_error"] = (
                 result.get("error") or result.get("status")
             )
+            state.analysis_results["workflow_status"] = "parțial"
+            state.cache_events.append(
+                "Avertisment: Dynamic World este parțial sau indisponibil; "
+                "rezultatul SAR rămâne disponibil."
+            )
         impact = state.analysis_results.get("osm_impact")
-        if result.get("status") == "reușit" and impact:
+        if succeeded and impact:
             state.analysis_results["osm_dynamic_world"] = correlate_osm_dynamic_world(
                 gee_status.ee,
                 result,
                 impact,
             )
-        state.cache_events.append(
-            "Diferențele observate Dynamic World au fost calculate."
-        )
-        return True
+        if succeeded:
+            state.cache_events.append(
+                "Diferențele observate Dynamic World au fost calculate."
+            )
+        return succeeded
     except Exception as exc:
         state.analysis_results["dynamic_world_error"] = str(exc)
+        state.analysis_results["workflow_status"] = "parțial"
         state.cache_events.append(
             "Dynamic World nu a putut fi calculat; rezultatul SAR rămâne disponibil."
         )
@@ -500,6 +513,17 @@ def execute_important_features(state: ImpactToolState) -> bool:
     }
     if result.status.ok:
         state.analysis_results["important_features"] = result.data
+        raw_osm = state.analysis_results.get("osm_raw")
+        if raw_osm:
+            raw_osm.setdefault("layers", {})["osm_critical"] = result.data
+            metadata = raw_osm.setdefault("metadata", {})
+            metadata["important_features_revision"] = (
+                int(metadata.get("important_features_revision", 0)) + 1
+            )
+            previous_revision = state.map_data_revision
+            recalculate_osm_impact(state)
+            if state.map_data_revision == previous_revision:
+                state.map_data_revision += 1
     state.important_features_requested = False
     record_timing(state, "obiective importante", result.status.duration_seconds)
     return result.status.ok

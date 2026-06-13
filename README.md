@@ -19,11 +19,13 @@ Geoapify and targeted Overpass data are optional: a temporary external-service
 failure is reported without discarding available raster results.
 
 Map visibility is controlled directly by the Leaflet layer panel. Toggling a layer
-does not rerun Streamlit or reset the current map view.
+does not rerun Streamlit or reset the current map view. Drawing an AOI requests one
+fit to that geometry; normal layer changes, popups, pan and zoom preserve the view.
+Reference buildings remain opt-in and are recommended at zoom 14 or greater.
 
 OSM retrieval is limited to significant components of `SAR new water + warning
-buffer`. Important facilities cover the active county or AOI and use Overpass as a
-fallback when Geoapify Places is unavailable.
+buffer`. Important facilities cover the active county or AOI, including unexposed
+context markers, and use Overpass as a fallback when Geoapify Places is unavailable.
 
 ## Local setup
 

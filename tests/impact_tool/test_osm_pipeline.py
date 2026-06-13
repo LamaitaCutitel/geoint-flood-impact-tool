@@ -20,7 +20,10 @@ from src.impact_tool.osm import (
 from src.impact_tool.osm_impact import (
     STATUS_BUFFER,
     STATUS_DIRECT,
+    STATUS_UNEXPOSED,
+    infrastructure_level,
     classify_osm_impact,
+    normalized_feature_category,
     symbol_for_feature,
 )
 
@@ -29,6 +32,73 @@ COUNTY = {
     "type": "Polygon",
     "coordinates": [[[27.0, 45.0], [28.0, 45.0], [28.0, 46.0], [27.0, 46.0], [27.0, 45.0]]],
 }
+
+
+def test_critical_facilities_keep_unexposed_inside_active_area_and_drop_outside() -> None:
+    water = {
+        "type": "Polygon",
+        "coordinates": [[
+            [27.499, 45.499],
+            [27.501, 45.499],
+            [27.501, 45.501],
+            [27.499, 45.501],
+            [27.499, 45.499],
+        ]],
+    }
+    active = {
+        "type": "Polygon",
+        "coordinates": [[
+            [27.4, 45.4],
+            [27.6, 45.4],
+            [27.6, 45.6],
+            [27.4, 45.6],
+            [27.4, 45.4],
+        ]],
+    }
+    points = (
+        ("direct", [27.5, 45.5], "hospital"),
+        ("buffer", [27.502, 45.5], "pharmacy"),
+        ("unexposed", [27.55, 45.55], "school"),
+        ("outside", [28.0, 46.0], "police"),
+    )
+    layers = {
+        "osm_critical": {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": coordinates},
+                    "properties": {"name": name, "category": category},
+                }
+                for name, coordinates, category in points
+            ],
+        }
+    }
+    result = classify_osm_impact(
+        layers,
+        water,
+        150,
+        active_geometry=active,
+        projection_cache_key="critical-active-area",
+    )
+    features = result["layers"]["osm_critical"]["display_features"]
+    by_name = {feature["properties"]["name"]: feature["properties"] for feature in features}
+    assert set(by_name) == {"direct", "buffer", "unexposed"}
+    assert by_name["direct"]["status"] == STATUS_DIRECT
+    assert by_name["buffer"]["status"] == STATUS_BUFFER
+    assert by_name["unexposed"]["status"] == STATUS_UNEXPOSED
+    assert result["metrics"]["critical_direct"] == 1
+    assert result["metrics"]["critical_buffer"] == 1
+
+
+def test_geoapify_category_has_priority_for_level_and_symbol() -> None:
+    properties = {
+        "category": "hospital",
+        "tags": {"amenity": "school"},
+    }
+    assert normalized_feature_category(properties) == "hospital"
+    assert infrastructure_level(properties, "osm_critical") == "esențial"
+    assert symbol_for_feature(properties, "osm_critical") == "✚"
 
 
 def test_osm_is_blocked_before_analysis(tmp_path) -> None:

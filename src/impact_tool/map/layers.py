@@ -5,12 +5,31 @@ from typing import Any
 import warnings
 
 import folium
-from branca.element import MacroElement
 from folium.plugins import MarkerCluster
-from jinja2 import Template
 from shapely.geometry import shape
 
 from src.app_support.county_boundaries import county_display_name
+from src.impact_tool.osm_impact import normalized_feature_category
+
+
+_LAYER_PREFIXES = {
+    "sar_": "[SAR] ",
+    "dynamic_world_": "[DW] ",
+    "both_methods": "[DW] ",
+    "only_sar": "[DW] ",
+    "only_dynamic_world": "[DW] ",
+}
+
+
+def _prefixed_layer_name(layer: dict[str, Any]) -> str:
+    name = str(layer.get("name") or layer.get("id") or "Layer")
+    if name.startswith("["):
+        return name
+    layer_id = str(layer.get("id") or "")
+    for prefix, label in _LAYER_PREFIXES.items():
+        if layer_id.startswith(prefix):
+            return f"{label}{name}"
+    return name
 
 
 def add_county_outlines(
@@ -78,7 +97,7 @@ def add_tile_layers(folium_map: folium.Map, layers: list[dict[str, Any]]) -> Non
         folium.TileLayer(
             tiles=tile_url,
             attr="Google Earth Engine",
-            name=layer["name"],
+            name=_prefixed_layer_name(layer),
             overlay=True,
             control=True,
             show=bool(layer.get("show", layer.get("shown", True))),
@@ -114,7 +133,7 @@ def add_osm_layers(
             _add_building_groups(folium_map, features)
             continue
         group = folium.FeatureGroup(
-            name=collection.get("display_name", layer_id),
+            name=_osm_layer_name(layer_id, collection.get("display_name", layer_id)),
             overlay=True,
             control=True,
             show=bool(collection.get("show", True)),
@@ -161,8 +180,6 @@ def add_osm_layers(
                 ),
                 tooltip=_osm_tooltip(reference_features),
             ).add_to(reference_group)
-            _ZoomVisibility(reference_group.get_name(), 14).add_to(folium_map)
-
         if layer_id in {"osm_critical", "osm_bridges"}:
             cluster = MarkerCluster(
                 name=f"{layer_id}-markers",
@@ -174,6 +191,9 @@ def add_osm_layers(
                 properties = feature.get("properties", {})
                 name = escape(str(properties.get("name") or _feature_label(layer_id)))
                 category = escape(str(_feature_category(properties, layer_id)))
+                infrastructure_level = escape(
+                    str(properties.get("infrastructure_level") or "context tehnic")
+                )
                 status = escape(str(properties.get("status") or "Necunoscut"))
                 distance = escape(str(properties.get("distance_to_water_m", "indisponibil")))
                 address = escape(str(properties.get("address") or "indisponibil"))
@@ -192,10 +212,11 @@ def add_osm_layers(
                     tooltip=f"{name} · {status}",
                     popup=folium.Popup(
                         f"<strong>{name}</strong><br>Categorie: {category}<br>"
-                        f"Adresă: {address}<br>Coordonate: {coordinates}<br>"
-                        f"Status: {status}<br>"
+                        f"Nivel infrastructură: {infrastructure_level}<br>"
+                        f"Status expunere: {status}<br>"
                         f"Distanță până la apă: {distance} m<br>"
-                        f"Sursă: {source}",
+                        f"Adresă: {address}<br>Sursă: {source}<br>"
+                        f"Coordonate: {coordinates}",
                         max_width=320,
                     ),
                 ).add_to(cluster)
@@ -206,9 +227,9 @@ def _add_building_groups(
     features: list[dict[str, Any]],
 ) -> None:
     definitions = (
-        ("Intersectat direct", "Clădiri intersectate direct", True),
-        ("În buffer de avertizare", "Clădiri în buffer", True),
-        ("Referință", "Clădiri de referință", False),
+        ("Intersectat direct", "[OSM] Clădiri direct intersectate", True),
+        ("În buffer de avertizare", "[OSM] Clădiri în buffer", True),
+        ("Referință", "[OSM] Clădiri de referință", False),
     )
     for status, name, shown in definitions:
         selected = [
@@ -233,10 +254,6 @@ def _add_building_groups(
             ),
             tooltip=_osm_tooltip(selected),
         ).add_to(group)
-        if status == "Referință":
-            _ZoomVisibility(group.get_name(), 14).add_to(folium_map)
-
-
 def _status_color(status: str) -> str:
     if status == "Intersectat direct":
         return "#dc2626"
@@ -285,7 +302,7 @@ def _icon_kind(properties: dict[str, Any], layer_id: str) -> str:
         "water_tower": "water",
         "wastewater_plant": "water",
     }
-    normalized_category = tags.get("category")
+    normalized_category = normalized_feature_category(properties)
     if normalized_category in names:
         return names[normalized_category]
     if amenity in names:
@@ -329,14 +346,17 @@ def _feature_label(layer_id: str) -> str:
 def _feature_category(properties: dict[str, Any], layer_id: str) -> str:
     if layer_id == "osm_bridges":
         return "Pod"
-    tags = properties.get("tags") if isinstance(properties.get("tags"), dict) else properties
-    return str(
-        tags.get("amenity")
-        or tags.get("healthcare")
-        or tags.get("emergency")
-        or tags.get("power")
-        or "Obiectiv critic"
-    )
+    return normalized_feature_category(properties) or "Obiectiv critic"
+
+
+def _osm_layer_name(layer_id: str, display_name: str) -> str:
+    names = {
+        "osm_roads": "[OSM] Drumuri afectate",
+        "osm_railways": "[OSM] Căi ferate afectate",
+        "osm_bridges": "[OSM] Poduri",
+        "osm_critical": "[OSM] Obiective importante",
+    }
+    return names.get(layer_id, f"[OSM] {display_name}")
 
 
 def _osm_tooltip(features: list[dict[str, Any]]) -> folium.GeoJsonTooltip | None:
@@ -357,31 +377,3 @@ def _osm_tooltip(features: list[dict[str, Any]]) -> folium.GeoJsonTooltip | None
         return None
     aliases = [alias for field, alias in candidates if field in available]
     return folium.GeoJsonTooltip(fields=fields, aliases=aliases, localize=True)
-
-
-class _ZoomVisibility(MacroElement):
-    _template = Template(
-        """
-        {% macro script(this, kwargs) %}
-        (function () {
-          var map = {{ this._parent.get_name() }};
-          var layer = {{ this.layer_name }};
-          function syncReferenceVisibility() {
-            if (map.getZoom() >= {{ this.minimum_zoom }}) {
-              if (!map.hasLayer(layer)) { layer.addTo(map); }
-            } else if (map.hasLayer(layer)) {
-              map.removeLayer(layer);
-            }
-          }
-          map.on('zoomend', syncReferenceVisibility);
-          syncReferenceVisibility();
-        })();
-        {% endmacro %}
-        """
-    )
-
-    def __init__(self, layer_name: str, minimum_zoom: int) -> None:
-        super().__init__()
-        self._name = "ZoomVisibility"
-        self.layer_name = layer_name
-        self.minimum_zoom = minimum_zoom

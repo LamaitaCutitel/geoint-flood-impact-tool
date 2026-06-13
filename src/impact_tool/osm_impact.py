@@ -28,10 +28,38 @@ SYMBOLS = {
     "school": "▣",
     "kindergarten": "▣",
     "fuel": "⛽",
+    "shelter": "⌂",
+    "ambulance_station": "✚",
+    "railway_station": "◆",
+    "power_substation": "⚡",
+    "power_plant": "⚡",
+    "water_tower": "●",
+    "wastewater_plant": "●",
     "power": "⚡",
     "bridge": "⌒",
     "station": "◆",
     "fallback": "●",
+}
+
+ESSENTIAL_CATEGORIES = {
+    "hospital",
+    "clinic",
+    "doctors",
+    "ambulance_station",
+    "fire_station",
+    "police",
+    "shelter",
+    "power_substation",
+    "power_plant",
+    "water_tower",
+}
+IMPORTANT_CATEGORIES = {
+    "pharmacy",
+    "school",
+    "kindergarten",
+    "fuel",
+    "railway_station",
+    "wastewater_plant",
 }
 
 
@@ -116,7 +144,7 @@ def classify_osm_impact(
             warning_area,
         )
         candidate_indices = set(range(len(source_features)))
-        if projection_cache_key:
+        if projection_cache_key and layer_id != "osm_critical":
             candidate_indices = set(warning_candidates)
             if layer_id == "osm_buildings":
                 candidate_indices.update(
@@ -129,6 +157,12 @@ def classify_osm_impact(
         for index in sorted(candidate_indices):
             feature = source_features[index]
             projected = projected_geometries[index]
+            if (
+                layer_id == "osm_critical"
+                and active_prepared is not None
+                and not active_prepared.intersects(projected)
+            ):
+                continue
             if index in direct_candidates and water_prepared.intersects(projected):
                 status = STATUS_DIRECT
             elif index in warning_candidates and warning_prepared.intersects(projected):
@@ -243,7 +277,11 @@ def _prepare_projected_layers(
         geometries = []
         for feature in collection.get("features", []):
             geometry = shape(feature["geometry"])
-            if candidate_prepared is not None and not candidate_prepared.intersects(geometry):
+            if (
+                layer_id != "osm_critical"
+                and candidate_prepared is not None
+                and not candidate_prepared.intersects(geometry)
+            ):
                 continue
             features.append(feature)
             geometries.append(project(geometry))
@@ -260,17 +298,56 @@ def _prepare_projected_layers(
 
 
 def symbol_for_feature(properties: dict[str, Any], layer_id: str) -> str:
+    if layer_id == "osm_bridges":
+        return SYMBOLS["bridge"]
+    category = normalized_feature_category(properties)
+    if category in SYMBOLS:
+        return SYMBOLS[category]
     tags = properties.get("tags") if isinstance(properties.get("tags"), dict) else properties
     amenity = tags.get("amenity") or tags.get("healthcare")
     if amenity in SYMBOLS:
         return SYMBOLS[amenity]
-    if layer_id == "osm_bridges":
-        return SYMBOLS["bridge"]
     if tags.get("power"):
         return SYMBOLS["power"]
     if tags.get("railway") == "station":
         return SYMBOLS["station"]
     return SYMBOLS["fallback"]
+
+
+def normalized_feature_category(properties: dict[str, Any]) -> str:
+    explicit = properties.get("category")
+    if explicit:
+        return str(explicit)
+    tags = properties.get("tags") if isinstance(properties.get("tags"), dict) else properties
+    amenity = str(tags.get("amenity") or "")
+    healthcare = str(tags.get("healthcare") or "")
+    emergency = str(tags.get("emergency") or "")
+    power = str(tags.get("power") or "")
+    man_made = str(tags.get("man_made") or "")
+    if healthcare in {"hospital", "clinic", "doctors", "pharmacy"}:
+        return healthcare
+    if amenity in {
+        "hospital",
+        "clinic",
+        "doctors",
+        "pharmacy",
+        "fire_station",
+        "police",
+        "school",
+        "kindergarten",
+        "fuel",
+        "shelter",
+    }:
+        return amenity
+    if emergency == "ambulance_station":
+        return "ambulance_station"
+    if power in {"substation", "plant"}:
+        return f"power_{power}"
+    if man_made == "water_tower":
+        return "water_tower"
+    if tags.get("railway") == "station":
+        return "railway_station"
+    return "fallback"
 
 
 def visible_impact_layers(
@@ -422,6 +499,11 @@ def _linear_display_features(
 
 
 def infrastructure_level(properties: dict[str, Any], layer_id: str) -> str:
+    category = normalized_feature_category(properties)
+    if category in ESSENTIAL_CATEGORIES:
+        return "esențial"
+    if category in IMPORTANT_CATEGORIES:
+        return "important"
     tags = properties.get("tags") if isinstance(properties.get("tags"), dict) else properties
     if (
         tags.get("amenity") in {"hospital", "clinic", "fire_station", "police"}

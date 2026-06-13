@@ -137,6 +137,83 @@ def test_manual_dynamic_world_invalidates_pdf_and_recalculates_correlation(
     assert state.analysis_results["osm_dynamic_world"]["rows"]
 
 
+def test_dynamic_world_unavailable_tile_keeps_partial_result_and_sar(monkeypatch) -> None:
+    state = _analysis_state()
+    state.analysis_results = {"sar": {"products": {"sar_new_water": "water"}}}
+    monkeypatch.setattr(analysis, "initialize_earth_engine", lambda: FakeGeeStatus())
+    monkeypatch.setattr(analysis, "build_aoi_from_geometry", lambda *args: "aoi")
+    monkeypatch.setattr(
+        analysis,
+        "run_dynamic_world_analysis",
+        lambda *args: {
+            "status": "tile indisponibil",
+            "metrics": {"before_water_km2": 1.2},
+            "error": "Tile indisponibil",
+        },
+    )
+    revision = state.map_data_revision
+    assert not analysis.execute_dynamic_world(state)
+    assert state.analysis_results["dynamic_world"]["metrics"]["before_water_km2"] == 1.2
+    assert state.analysis_results["sar"]
+    assert state.analysis_results["workflow_status"] == "parțial"
+    assert state.map_data_revision == revision
+    assert any("Avertisment" in event for event in state.cache_events)
+
+
+def test_important_features_retry_reclassifies_osm_and_invalidates_report(
+    monkeypatch,
+) -> None:
+    state = _analysis_state()
+    state.analysis_complete = True
+    state.report_bytes = b"old"
+    state.report_filename = "old.pdf"
+    state.analysis_results = {
+        "osm_raw": {
+            "layers": {
+                "osm_critical": {"type": "FeatureCollection", "features": []},
+            },
+            "metadata": {},
+        }
+    }
+    collection = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [27.5, 45.5]},
+            "properties": {"category": "hospital"},
+        }],
+    }
+    status = type(
+        "Status",
+        (),
+        {
+            "ok": True,
+            "source": "Geoapify Places",
+            "warning": "",
+            "completeness": "complet",
+            "duration_seconds": 0.1,
+        },
+    )()
+    monkeypatch.setattr(
+        analysis,
+        "fetch_important_facilities",
+        lambda **kwargs: type("Result", (), {"data": collection, "status": status})(),
+    )
+    calls = []
+    monkeypatch.setattr(
+        analysis,
+        "recalculate_osm_impact",
+        lambda current: calls.append(current) or True,
+    )
+    revision = state.map_data_revision
+    assert analysis.execute_important_features(state)
+    assert state.analysis_results["osm_raw"]["layers"]["osm_critical"] is collection
+    assert calls == [state]
+    assert state.map_data_revision == revision + 1
+    assert state.report_bytes is None
+    assert state.report_filename == ""
+
+
 def test_osm_loading_uses_targeted_water_geometry(monkeypatch) -> None:
     state = ImpactToolState(
         analysis_complete=True,

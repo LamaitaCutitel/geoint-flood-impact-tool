@@ -18,7 +18,7 @@ GEOMETRY_ENDPOINT = "https://api.geoapify.com/v1/geometry/operation"
 
 def simplify_geometry(
     geometry: dict[str, Any],
-    tolerance: float,
+    tolerance_meters: float,
     *,
     api_key: str | None = None,
     session: requests.Session | None = None,
@@ -27,14 +27,20 @@ def simplify_geometry(
         {
             "operation": "simplify",
             "geometry": geometry,
-            "params": {"tolerance": tolerance, "highQuality": True},
+            "params": {"tolerance": tolerance_meters, "highQuality": True},
         },
         api_key=api_key,
         session=session,
     )
     if result.status.ok:
         return result
-    local = mapping(shape(geometry).simplify(tolerance, preserve_topology=True))
+    forward = Transformer.from_crs("EPSG:4326", "EPSG:3035", always_xy=True)
+    reverse = Transformer.from_crs("EPSG:3035", "EPSG:4326", always_xy=True)
+    projected = transform(forward.transform, shape(geometry))
+    simplified = projected.simplify(tolerance_meters, preserve_topology=True)
+    if not simplified.is_valid:
+        simplified = simplified.buffer(0)
+    local = mapping(transform(reverse.transform, simplified))
     return ExternalResult.success(
         local,
         source="Shapely local fallback",

@@ -26,7 +26,7 @@ def test_optional_maptiler_context_is_a_hidden_attributed_tile_layer() -> None:
     html = build_shell_map(
         None,
         "Galati",
-        building_context_tile="https://tiles.example/{z}/{x}/{y}.png?key=test",
+        maptiler_context_tile="https://tiles.example/{z}/{x}/{y}.png?key=test",
     ).get_root().render()
     assert "Context cartografic MapTiler Streets" in html
     assert "MapTiler, OpenStreetMap contributors" in html
@@ -203,6 +203,63 @@ def test_navigation_control_can_center_aoi() -> None:
     }
     html = build_shell_map(counties, "Galati", aoi_geometry=aoi).get_root().render()
     assert "Centrează pe AOI" in html
+
+
+def test_fit_bounds_prefers_aoi_and_navigation_persists_without_fit_request() -> None:
+    counties = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"NAME_LATN": "Galati"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[27, 45], [28, 45], [28, 46], [27, 46], [27, 45]]],
+            },
+        }],
+    }
+    aoi = {
+        "type": "Polygon",
+        "coordinates": [[[27.2, 45.2], [27.4, 45.2], [27.4, 45.4], [27.2, 45.4], [27.2, 45.2]]],
+    }
+    fitted = build_shell_map(
+        counties,
+        "Galati",
+        aoi_geometry=aoi,
+        fit_bounds_requested=True,
+    ).get_root().render()
+    assert "fitBounds(" in fitted
+    assert "[[45.2, 27.2], [45.4, 27.4]]" in fitted
+    persistent = build_shell_map(
+        counties,
+        "Galati",
+        aoi_geometry=aoi,
+        fit_bounds_requested=False,
+        map_center=[45.31, 27.31],
+        map_zoom=13,
+    ).get_root().render()
+    assert "Centrează pe județ" in persistent
+    assert "Centrează pe AOI" in persistent
+    assert persistent.count(".fitBounds(") == 2
+    assert fitted.count(".fitBounds(") == 3
+    assert '"zoom": 13' in persistent
+
+
+def test_navigation_hides_aoi_action_when_no_aoi_exists() -> None:
+    counties = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"NAME_LATN": "Galati"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[27, 45], [28, 45], [28, 46], [27, 46], [27, 45]]],
+            },
+        }],
+    }
+    html = build_shell_map(counties, "Galati").get_root().render()
+    assert "Revino la România" in html
+    assert "Centrează pe județ" in html
+    assert "Centrează pe AOI" not in html
 
 
 def test_focus_uses_single_set_view_at_zoom_17() -> None:
@@ -444,7 +501,7 @@ def test_bridge_has_line_and_centroid_icon() -> None:
     assert "<text" not in html
 
 
-def test_reference_buildings_render_only_at_large_zoom() -> None:
+def test_reference_buildings_remain_user_controlled_during_zoom() -> None:
     folium_map = folium.Map(location=[45.5, 27.5], zoom_start=10)
     add_osm_layers(
         folium_map,
@@ -461,9 +518,35 @@ def test_reference_buildings_render_only_at_large_zoom() -> None:
             }
         },
     )
+    folium.LayerControl().add_to(folium_map)
     html = folium_map.get_root().render()
-    assert "syncReferenceVisibility" in html
-    assert "getZoom() >= 14" in html
+    assert "[OSM] Cl\\u0103diri de referin\\u021b\\u0103" in html
+    assert "syncReferenceVisibility" not in html
+    assert "getZoom() >= 14" not in html
+    assert "zoomend" not in html
+
+
+def test_legend_omits_hidden_tiles_and_layer_control_collapses_for_many_overlays() -> None:
+    layers = [
+        {
+            "id": f"sar_layer_{index}",
+            "name": f"Layer {index}",
+            "tile_url": f"https://tiles.test/{index}/{{z}}/{{x}}/{{y}}",
+            "shown": index == 0,
+        }
+        for index in range(9)
+    ]
+    html = build_shell_map(
+        None,
+        "Galati",
+        analysis_layers=layers,
+    ).get_root().render()
+    from src.impact_tool.map.legend import legend_entries
+
+    labels = [label for label, _ in legend_entries(layers, False, None)]
+    assert "Layer 0" in labels
+    assert "Layer 1" not in labels
+    assert '"collapsed": true' in html
 
 
 def test_osm_layers_ignore_legacy_streamlit_visibility_state() -> None:

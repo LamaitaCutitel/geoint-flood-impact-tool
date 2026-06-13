@@ -272,6 +272,18 @@ def test_compare_action_precedes_confirmation() -> None:
     assert source.index('"Compară imaginile"') < source.index('"Confirmă imaginile"')
     assert '"Ieși din comparație"' in source
     assert '"Curăță selecția"' in source
+    assert "Activează bara BEFORE / AFTER" not in source
+    compare_block = source.split('"Compară imaginile"', 1)[1].split(
+        '"Confirmă imaginile"',
+        1,
+    )[0]
+    assert "state.scene_compare_active = True" in compare_block
+    advanced_block = source.split(
+        'st.expander("Opțiuni avansate"',
+        1,
+    )[1].split("if state.comparison_ready:", 1)[0]
+    assert '"Mod comparație"' in advanced_block
+    assert source.count('"Rulează analiza completă"') == 1
 
 
 def test_large_scene_explorer_is_outside_sidebar_and_uses_four_columns() -> None:

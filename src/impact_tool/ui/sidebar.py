@@ -294,19 +294,6 @@ def render_sidebar(st: Any, state: ImpactToolState) -> tuple[dict | None, list[s
             if state.sar_parameters_message:
                 st.warning(state.sar_parameters_message)
 
-        if state.comparison_ready:
-            scene_compare_active = st.toggle(
-                "Activează bara BEFORE / AFTER",
-                value=state.scene_compare_active,
-                help="Încarcă imaginile selectate și afișează separatorul vertical pe hartă.",
-            )
-            if scene_compare_active != state.scene_compare_active:
-                state.scene_compare_active = scene_compare_active
-                state.swipe_enabled = scene_compare_active
-                state.layer_compare_active = False
-                if scene_compare_active and not state.scene_compare_tiles:
-                    _refresh_preview_tiles(state)
-                st.rerun()
             selected_preview_mode = st.radio(
                 "Mod comparație",
                 ["Radar brut în tonuri de gri", "Doar apă observată prin SAR"],
@@ -314,10 +301,15 @@ def render_sidebar(st: Any, state: ImpactToolState) -> tuple[dict | None, list[s
                 disabled=not state.scene_compare_active,
                 help="Schimbă reprezentarea comparatorului fără a porni analiza finală.",
             )
-            if selected_preview_mode != state.preview_mode:
+            if (
+                state.scene_compare_active
+                and selected_preview_mode != state.preview_mode
+            ):
                 state.preview_mode = selected_preview_mode
                 _refresh_preview_tiles(state)
                 st.rerun()
+
+        if state.comparison_ready:
             if state.scene_compare_active:
                 st.caption("Comparatorul vertical este activ pe hartă.")
         else:
@@ -533,8 +525,16 @@ def _render_scene_pair(st: Any, state: ImpactToolState) -> None:
             state.preview_scene_id = ""
             state.preview_scene_tile = ""
             st.rerun()
-    action_left, action_right = st.columns(2)
+    action_left, action_right = st.columns([2, 1])
     if action_left.button(
+        "Curăță selecția",
+        use_container_width=True,
+        disabled=not (state.before_scene or state.after_scene),
+        key="clear_scene_pair",
+    ):
+        apply_scene_pair(state, None, None, False)
+        st.rerun()
+    if action_right.button(
         "Ieși din comparație",
         use_container_width=True,
         disabled=not state.scene_compare_active,
@@ -542,14 +542,6 @@ def _render_scene_pair(st: Any, state: ImpactToolState) -> None:
     ):
         reset_comparison(state)
         state.comparison_ready = bool(state.before_scene and state.after_scene)
-        st.rerun()
-    if action_right.button(
-        "Curăță selecția",
-        use_container_width=True,
-        disabled=not (state.before_scene or state.after_scene),
-        key="clear_scene_pair",
-    ):
-        apply_scene_pair(state, None, None, False)
         st.rerun()
 
 

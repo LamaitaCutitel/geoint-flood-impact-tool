@@ -4,6 +4,8 @@
 - [ ] Application starts without `.env` and explains missing optional configuration.
 - [ ] GEE status is correct after local authorization.
 - [ ] County click and selector center the map.
+- [ ] Drawing an AOI centers once on the AOI; clearing it returns to the county.
+- [ ] Romania, county and optional AOI navigation buttons remain available.
 - [ ] BEFORE/AFTER validation rejects incompatible pairs unless explicitly overridden.
 - [ ] Only one comparison divider is visible.
 - [ ] Comparator swap and close clean temporary layers.
@@ -11,9 +13,11 @@
 - [ ] Dynamic World runs independently.
 - [ ] MapTiler context is optional and attributed.
 - [ ] Geoapify facilities are clustered and have detailed popups.
+- [ ] Important facilities outside the warning buffer remain visible in gray.
 - [ ] Targeted OSM reports partial results instead of crashing on category failure.
 - [ ] Buffer change invalidates OSM impact/report only.
 - [ ] Layer toggles control visible analytical layers.
+- [ ] Reference buildings remain hidden after zoom changes until enabled manually.
 - [ ] PDF downloads after SAR even when OSM is unavailable.
 - [ ] PDF includes methodology, sources, limitations, warnings, and preliminary-result disclaimer.
 - [ ] No secrets, cache, raster, archive, or generated output is tracked.

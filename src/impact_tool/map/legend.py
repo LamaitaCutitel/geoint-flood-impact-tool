@@ -13,7 +13,7 @@ class ImpactLegend(MacroElement):
         <div class="impact-map-legend">
           <strong>Legenda</strong>
           {{ this.entries_html }}
-          <small>Sunt explicate numai layerele active implicit.</small>
+          <small>Clădirile de referință sunt recomandate la zoom ≥ 14.</small>
         </div>
         <style>
           .impact-map-legend {
@@ -48,32 +48,16 @@ def legend_entries(
 ) -> list[tuple[str, str]]:
     entries = [("Județ / AOI", "#2563eb")]
     for layer in analysis_layers or []:
-        entries.append((layer["name"], layer.get("color", "#64748b")))
+        if layer.get("shown", layer.get("show", True)):
+            entries.append((layer["name"], layer.get("color", "#64748b")))
     if has_buffer:
         entries.append(("Buffer de avertizare", "#f59e0b"))
-    osm_entries = {
-        "osm_buildings": (
-            ("Clădiri intersectate direct", "#dc2626"),
-            ("Clădiri în buffer", "#f97316"),
-            ("Clădiri de referință", "#64748b"),
-        ),
-        "osm_roads": (
-            ("Drumuri intersectate direct", "#dc2626"),
-            ("Drumuri în buffer", "#f97316"),
-        ),
-        "osm_railways": (
-            ("Căi ferate intersectate direct", "#dc2626"),
-            ("Căi ferate în buffer", "#f97316"),
-        ),
-        "osm_bridges": (
-            ("Poduri intersectate direct", "#dc2626"),
-            ("Poduri în buffer", "#f97316"),
-        ),
-        "osm_critical": (
-            ("Obiective critice intersectate direct", "#dc2626"),
-            ("Obiective critice în buffer", "#f97316"),
-        ),
-    }
-    for layer_id in (osm_layers or {}):
-        entries.extend(osm_entries.get(layer_id, ()))
+    if osm_layers:
+        entries.extend(
+            (
+                ("Intersectat direct", "#dc2626"),
+                ("În buffer de avertizare", "#f97316"),
+                ("Reper neexpus", "#64748b"),
+            )
+        )
     return entries

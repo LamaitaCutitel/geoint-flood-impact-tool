@@ -11,7 +11,7 @@ MAPTILER_STREETS_URL = (
 )
 
 
-def county_buildings_context(api_key: str | None = None) -> ExternalResult:
+def county_maptiler_context(api_key: str | None = None) -> ExternalResult:
     key = api_key if api_key is not None else os.getenv("MAPTILER_API_KEY", "")
     if not key:
         return ExternalResult.failure(

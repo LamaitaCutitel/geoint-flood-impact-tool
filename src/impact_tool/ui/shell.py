@@ -22,7 +22,7 @@ from src.impact_tool.analysis import (
     recalculate_osm_impact,
 )
 from src.impact_tool.dynamic_world import dynamic_world_layer_definitions
-from src.impact_tool.external.maptiler import county_buildings_context
+from src.impact_tool.external.maptiler import county_maptiler_context
 from src.impact_tool.map.builder import build_shell_map
 from src.impact_tool.models import APP_SUBTITLE, APP_TITLE
 from src.impact_tool.osm_impact import visible_impact_layers
@@ -156,9 +156,9 @@ def render_app(st_module: Any | None = None) -> None:
     for warning in boundary_warnings or []:
         st.warning(warning)
 
-    building_context = county_buildings_context()
-    if not building_context.status.ok:
-        st.caption(building_context.status.warning)
+    maptiler_context = county_maptiler_context()
+    if not maptiler_context.status.ok:
+        st.caption(maptiler_context.status.warning)
     with st.container():
         from streamlit_folium import st_folium
 
@@ -187,9 +187,9 @@ def render_app(st_module: Any | None = None) -> None:
             analysis_layers=_analysis_layers(state),
             buffer_geometry=_selected_buffer_geometry(state),
             osm_layers=_visible_osm_layers(state),
-            building_context_tile=(
-                building_context.data["tile_url"]
-                if building_context.status.ok
+            maptiler_context_tile=(
+                maptiler_context.data["tile_url"]
+                if maptiler_context.status.ok
                 else None
             ),
             focus_location=focus_location,

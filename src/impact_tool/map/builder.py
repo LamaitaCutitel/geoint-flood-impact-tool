@@ -62,7 +62,7 @@ def build_shell_map(
     analysis_layers: list[dict[str, Any]] | None = None,
     buffer_geometry: dict[str, Any] | None = None,
     osm_layers: dict[str, dict[str, Any]] | None = None,
-    building_context_tile: str | None = None,
+    maptiler_context_tile: str | None = None,
     focus_location: list[float] | None = None,
     map_center: list[float] | None = None,
     map_zoom: int | None = None,
@@ -92,11 +92,11 @@ def build_shell_map(
         control=True,
         show=True,
     ).add_to(folium_map)
-    if building_context_tile:
+    if maptiler_context_tile:
         folium.TileLayer(
-            tiles=building_context_tile,
+            tiles=maptiler_context_tile,
             attr="MapTiler, OpenStreetMap contributors",
-            name="Context cartografic MapTiler Streets",
+            name="[CTX] Context cartografic MapTiler Streets",
             overlay=True,
             control=True,
             show=False,
@@ -157,13 +157,20 @@ def build_shell_map(
             },
             edit_options={"edit": False, "remove": False},
         ).add_to(folium_map)
-    if selected_bbox and fit_bounds_requested:
-        folium_map.fit_bounds(
-            [[selected_bbox[1], selected_bbox[0]], [selected_bbox[3], selected_bbox[2]]]
-        )
+    county_bounds = (
+        [[selected_bbox[1], selected_bbox[0]], [selected_bbox[3], selected_bbox[2]]]
+        if selected_bbox
+        else None
+    )
+    aoi_bounds = _geometry_bounds(aoi_geometry)
+    if fit_bounds_requested:
+        requested_bounds = aoi_bounds or county_bounds
+        if requested_bounds:
+            folium_map.fit_bounds(requested_bounds)
+    if county_bounds:
         NavigationControl(
-            [[selected_bbox[1], selected_bbox[0]], [selected_bbox[3], selected_bbox[2]]],
-            _geometry_bounds(aoi_geometry),
+            county_bounds,
+            aoi_bounds,
         ).add_to(folium_map)
     MeasureControl(
         position="topleft",
@@ -198,5 +205,41 @@ def build_shell_map(
     if focus_location and len(focus_location) == 2:
         latitude, longitude = focus_location
         FocusLocation(latitude, longitude).add_to(folium_map)
-    folium.LayerControl(collapsed=False, position="topright").add_to(folium_map)
+    overlay_count = _overlay_count(
+        analysis_layers or [],
+        bool(buffer_geometry),
+        osm_layers or {},
+        bool(maptiler_context_tile),
+        bool(aoi_geometry),
+    )
+    folium.LayerControl(
+        collapsed=overlay_count > 8,
+        position="topright",
+    ).add_to(folium_map)
     return folium_map
+
+
+def _overlay_count(
+    analysis_layers: list[dict[str, Any]],
+    has_buffer: bool,
+    osm_layers: dict[str, dict[str, Any]],
+    has_maptiler_context: bool,
+    has_aoi: bool,
+) -> int:
+    count = 1 + int(has_buffer) + int(has_maptiler_context) + int(has_aoi)
+    count += sum(1 for layer in analysis_layers if layer.get("tile_url"))
+    for layer_id, collection in osm_layers.items():
+        features = collection.get("features", [])
+        if not features:
+            continue
+        if layer_id == "osm_buildings":
+            count += len(
+                {
+                    feature.get("properties", {}).get("status")
+                    for feature in features
+                    if feature.get("properties", {}).get("status")
+                }
+            )
+        else:
+            count += 1
+    return count

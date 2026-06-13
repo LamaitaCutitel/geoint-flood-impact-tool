@@ -3,6 +3,7 @@ from __future__ import annotations
 import requests
 
 from src.impact_tool.external.geoapify_places import (
+    CATEGORY_PRIORITY,
     fetch_important_facilities,
     fetch_places,
     normalize_category,
@@ -14,7 +15,7 @@ from src.impact_tool.external.geoapify_geometry import (
     buffer_geometry,
     simplify_geometry,
 )
-from src.impact_tool.external.maptiler import county_buildings_context
+from src.impact_tool.external.maptiler import county_maptiler_context
 from src.impact_tool.external.overpass_targeted import run_targeted_query
 
 
@@ -50,14 +51,14 @@ def test_http_session_has_user_agent_and_bounded_timeout(monkeypatch):
 
 
 def test_maptiler_missing_key_degrades_without_exposing_secret():
-    result = county_buildings_context("")
+    result = county_maptiler_context("")
     assert not result.status.ok
     assert result.data is None
     assert "lipsește" in result.status.warning
 
 
 def test_maptiler_context_uses_raster_tiles_only():
-    result = county_buildings_context("test-key")
+    result = county_maptiler_context("test-key")
     assert result.status.ok
     assert ".png" in result.data["tile_url"]
     assert ".pbf" not in result.data["tile_url"]
@@ -154,6 +155,55 @@ def test_geoapify_categories_and_duplicate_ids_are_normalized():
     assert properties["address"] == "Strada Test 1"
     assert properties["source_id"] == "same"
     assert normalize_category(["unknown.category"]) == "fallback"
+
+
+def test_geoapify_uses_only_validated_facility_categories():
+    expected = {
+        "healthcare.hospital",
+        "healthcare.clinic_or_praxis",
+        "healthcare.pharmacy",
+        "service.fire_station",
+        "service.police",
+        "education.school",
+        "childcare.kindergarten",
+        "commercial.gas",
+        "service.vehicle.fuel",
+        "service.social_facility.shelter",
+        "service.ambulance_station",
+        "public_transport.train",
+        "power.substation",
+        "power.plant",
+        "man_made.water_tower",
+    }
+    assert set(CATEGORY_PRIORITY) == expected
+    assert normalize_category(["childcare.kindergarten"]) == "kindergarten"
+    assert normalize_category(["service.ambulance_station"]) == "ambulance_station"
+    assert normalize_category(["service.vehicle.fuel"]) == "fuel"
+    assert normalize_category(["man_made.water_tower"]) == "water_tower"
+    assert normalize_category(["healthcare.doctor"]) == "fallback"
+    assert normalize_category(["production.wastewater"]) == "fallback"
+
+
+def test_local_simplify_fallback_uses_meter_projection_and_returns_valid_geometry():
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [[
+            [27.0, 45.0],
+            [27.001, 45.0],
+            [27.001, 45.001],
+            [27.0, 45.001],
+            [27.0, 45.0],
+        ]],
+    }
+    result = simplify_geometry(geometry, 10, api_key="")
+    assert result.status.ok
+    assert result.status.source == "Shapely local fallback"
+    from shapely.geometry import shape
+
+    simplified = shape(result.data)
+    assert simplified.is_valid
+    assert simplified.bounds[0] > 26
+    assert simplified.bounds[2] < 28
 
 
 def test_missing_geoapify_key_can_use_reduced_fallback():

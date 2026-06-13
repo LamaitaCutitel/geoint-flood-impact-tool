@@ -5,6 +5,7 @@ from typing import Any
 from src.impact_tool.analysis import recalculate_osm_impact
 from src.impact_tool.final_export import export_final_run_package
 from src.impact_tool.models import TAB_NAMES, ImpactToolState
+from src.impact_tool.osm_impact import normalized_feature_category
 from src.impact_tool.state import reset_analysis_results, reset_scene_selection
 from src.impact_tool.sar_qa import sar_qa_chart_data
 
@@ -446,13 +447,20 @@ def _render_priority_table(st: Any, state: ImpactToolState, impact: dict[str, An
     for layer_id, layer in impact.get("layers", {}).items():
         for feature in layer.get("features", []):
             properties = feature.get("properties", {})
-            if properties.get("status") == "Neexpus":
+            if (
+                properties.get("status") == "Neexpus"
+                and layer_id != "osm_critical"
+            ):
                 continue
             point = _feature_center(feature.get("geometry") or {})
             rows.append(
                 {
                     "name": properties.get("name") or "Fără nume",
-                    "category": category_names.get(layer_id, layer_id),
+                    "category": (
+                        normalized_feature_category(properties)
+                        if layer_id == "osm_critical"
+                        else category_names.get(layer_id, layer_id)
+                    ),
                     "status": properties.get("status", "Necunoscut"),
                     "distance_to_water_m": properties.get("distance_to_water_m", 0),
                     "level": properties.get("infrastructure_level", "context tehnic"),
@@ -464,7 +472,7 @@ def _render_priority_table(st: Any, state: ImpactToolState, impact: dict[str, An
     priority = {"esențial": 0, "important": 1, "context tehnic": 2}
     filter_label = st.selectbox(
         "Filtru elemente",
-        ["Toate expuse", "Direct", "Buffer", "Obiective importante"],
+        ["Toate elementele", "Direct", "Buffer", "Obiective importante"],
         key="osm_result_filter",
     )
     if filter_label == "Direct":
@@ -474,7 +482,7 @@ def _render_priority_table(st: Any, state: ImpactToolState, impact: dict[str, An
     elif filter_label == "Obiective importante":
         rows = [
             row for row in rows
-            if row["category"] == "Obiectiv critic"
+            if row["category"] not in category_names.values()
         ]
     rows.sort(
         key=lambda row: (
