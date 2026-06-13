@@ -78,6 +78,25 @@ def test_dynamic_world_remains_explicit_after_sar(monkeypatch) -> None:
     assert "dynamic_world" not in state.analysis_results
 
 
+def test_complete_analysis_preserves_sar_when_optional_stages_fail(monkeypatch) -> None:
+    state = _analysis_state()
+    dynamic_calls: list[str] = []
+    _mock_raster_dependencies(monkeypatch, dynamic_calls)
+    monkeypatch.setattr(analysis, "execute_dynamic_world", lambda *args, **kwargs: False)
+    monkeypatch.setattr(analysis, "execute_important_features", lambda *args, **kwargs: False)
+    monkeypatch.setattr(analysis, "execute_osm_loading", lambda *args, **kwargs: False)
+
+    progress = []
+    assert analysis.execute_complete_analysis(
+        state,
+        progress_callback=lambda percent, stage: progress.append((percent, stage)),
+    )
+
+    assert state.analysis_complete is True
+    assert state.analysis_results["workflow_status"] == "parțial"
+    assert progress[-1] == (100, "Analiza completă s-a încheiat")
+
+
 def test_sar_workflow_is_complete_before_osm(monkeypatch) -> None:
     state = _analysis_state()
     dynamic_calls: list[str] = []

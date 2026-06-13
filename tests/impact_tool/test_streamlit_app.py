@@ -16,9 +16,9 @@ def test_streamlit_shell_renders_without_exception():
     assert app.title[0].value == "Evaluarea impactului unei inundații"
     assert [tab.label for tab in app.tabs] == [
         "Hartă",
-        "Rezumat impact",
-        "Dynamic World",
-        "Elemente OSM",
+        "Rezumat",
+        "Elemente expuse",
+        "Detalii tehnice",
         "Raport",
     ]
     rendered_markdown = "\n".join(item.value for item in app.markdown)
@@ -32,7 +32,7 @@ def test_streamlit_controls_start_disabled():
     app.run(timeout=20)
 
     buttons = {button.label: button for button in app.button}
-    assert buttons["Rulează analiza SAR"].disabled is True
+    assert buttons["Rulează analiza completă"].disabled is True
     assert buttons["Generează și descarcă raportul PDF"].disabled is True
 
     buffer_slider = next(

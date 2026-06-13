@@ -32,7 +32,7 @@ def add_county_outlines(
     folium.GeoJson(
         counties_geojson,
         name="Limite județe",
-        control=False,
+        control=True,
         style_function=style,
         tooltip=folium.GeoJsonTooltip(fields=["NAME_LATN"], aliases=["Județ"]),
         show=True,
@@ -52,7 +52,7 @@ def add_aoi_layer(
             "geometry": aoi_geometry,
         },
         name="Zonă focală desenată",
-        control=False,
+        control=True,
         style_function=lambda _: {
             "color": "#16a34a",
             "weight": 3,
@@ -80,8 +80,8 @@ def add_tile_layers(folium_map: folium.Map, layers: list[dict[str, Any]]) -> Non
             attr="Google Earth Engine",
             name=layer["name"],
             overlay=True,
-            control=False,
-            show=True,
+            control=True,
+            show=bool(layer.get("show", layer.get("shown", True))),
         ).add_to(folium_map)
 
 
@@ -91,7 +91,7 @@ def add_buffer_layer(folium_map: folium.Map, geometry: dict[str, Any] | None) ->
     folium.GeoJson(
         {"type": "Feature", "properties": {}, "geometry": geometry},
         name="Buffer de avertizare",
-        control=False,
+        control=True,
         style_function=lambda _: {
             "color": "#f59e0b",
             "weight": 2,
@@ -110,11 +110,14 @@ def add_osm_layers(
         features = collection.get("features", [])
         if not features:
             continue
+        if layer_id == "osm_buildings":
+            _add_building_groups(folium_map, features)
+            continue
         group = folium.FeatureGroup(
             name=collection.get("display_name", layer_id),
             overlay=True,
-            control=False,
-            show=True,
+            control=True,
+            show=bool(collection.get("show", True)),
         ).add_to(folium_map)
         vector_features = []
         reference_features = []
@@ -146,8 +149,8 @@ def add_osm_layers(
             reference_group = folium.FeatureGroup(
                 name="Clădiri de referință",
                 overlay=True,
-                control=False,
-                show=True,
+                control=True,
+                show=False,
             ).add_to(group)
             folium.GeoJson(
                 {"type": "FeatureCollection", "features": reference_features},
@@ -198,6 +201,42 @@ def add_osm_layers(
                 ).add_to(cluster)
 
 
+def _add_building_groups(
+    folium_map: folium.Map,
+    features: list[dict[str, Any]],
+) -> None:
+    definitions = (
+        ("Intersectat direct", "Clădiri intersectate direct", True),
+        ("În buffer de avertizare", "Clădiri în buffer", True),
+        ("Referință", "Clădiri de referință", False),
+    )
+    for status, name, shown in definitions:
+        selected = [
+            feature
+            for feature in features
+            if feature.get("properties", {}).get("status") == status
+        ]
+        if not selected:
+            continue
+        group = folium.FeatureGroup(
+            name=name,
+            overlay=True,
+            control=True,
+            show=shown,
+        ).add_to(folium_map)
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": selected},
+            control=False,
+            style_function=lambda feature: _osm_style(
+                "osm_buildings",
+                feature.get("properties", {}).get("status", ""),
+            ),
+            tooltip=_osm_tooltip(selected),
+        ).add_to(group)
+        if status == "Referință":
+            _ZoomVisibility(group.get_name(), 14).add_to(folium_map)
+
+
 def _status_color(status: str) -> str:
     if status == "Intersectat direct":
         return "#dc2626"
@@ -225,26 +264,26 @@ def _osm_style(layer_id: str, status: str) -> dict[str, Any]:
 
 def _icon_kind(properties: dict[str, Any], layer_id: str) -> str:
     if layer_id == "osm_bridges":
-        return "pod"
+        return "bridge"
     tags = properties.get("tags") if isinstance(properties.get("tags"), dict) else properties
     amenity = tags.get("amenity") or tags.get("healthcare")
     names = {
-        "hospital": "H",
-        "clinic": "C",
-        "doctors": "M",
-        "pharmacy": "+",
-        "fire_station": "P",
-        "police": "Pol",
-        "school": "S",
-        "kindergarten": "S",
-        "fuel": "B",
-        "shelter": "A",
-        "ambulance_station": "Amb",
-        "railway_station": "G",
-        "power_substation": "E",
-        "power_plant": "E",
-        "water_tower": "A",
-        "wastewater_plant": "A",
+        "hospital": "medical",
+        "clinic": "medical",
+        "doctors": "medical",
+        "pharmacy": "pharmacy",
+        "fire_station": "fire",
+        "police": "shield",
+        "school": "school",
+        "kindergarten": "school",
+        "fuel": "fuel",
+        "shelter": "shelter",
+        "ambulance_station": "ambulance",
+        "railway_station": "train",
+        "power_substation": "power",
+        "power_plant": "power",
+        "water_tower": "water",
+        "wastewater_plant": "water",
     }
     normalized_category = tags.get("category")
     if normalized_category in names:
@@ -252,20 +291,34 @@ def _icon_kind(properties: dict[str, Any], layer_id: str) -> str:
     if amenity in names:
         return names[amenity]
     if tags.get("power"):
-        return "E"
+        return "power"
     if tags.get("railway") == "station":
-        return "G"
-    return "i"
+        return "train"
+    return "warning"
 
 
-def _svg_icon(label: str, color: str) -> str:
-    safe_label = escape(label)
+def _svg_icon(kind: str, color: str) -> str:
+    paths = {
+        "medical": '<path d="M13 7h4v6h6v4h-6v6h-4v-6H7v-4h6z"/>',
+        "pharmacy": '<path d="M8 9h14v4H8zm5-4h4v20h-4z"/>',
+        "fire": '<path d="M15 5c4 5 6 8 6 12a6 6 0 1 1-12 0c0-3 2-6 5-9 0 4 2 5 3 6 1-3 0-6-2-9z"/>',
+        "shield": '<path d="M15 4l9 4v7c0 6-4 9-9 11-5-2-9-5-9-11V8z"/>',
+        "school": '<path d="M3 11l12-6 12 6-12 6zm5 4l7 4 7-4v6l-7 4-7-4z"/>',
+        "fuel": '<path d="M7 5h10v20H7zm3 3v6h4V8zm8 3h3l3 4v9h-3v-7h-3z"/>',
+        "shelter": '<path d="M4 14L15 5l11 9-3 1v10h-6v-7h-4v7H7V15z"/>',
+        "ambulance": '<path d="M3 10h14v11H3zm14 4h5l4 4v3h-9zM8 12h4v2h2v4h-2v2H8v-2H6v-4h2z"/>',
+        "train": '<path d="M7 5h16v15l-3 4h-2l2-4H10l2 4h-2l-3-4zm3 3v7h10V8z"/>',
+        "power": '<path d="M17 3L7 17h7l-1 10 10-14h-7z"/>',
+        "water": '<path d="M15 3C11 9 8 13 8 18a7 7 0 0 0 14 0c0-5-3-9-7-15z"/>',
+        "bridge": '<path d="M4 20h22v4H4zm3-2c1-7 5-11 8-11s7 4 8 11h-4c-1-4-2-7-4-7s-3 3-4 7z"/>',
+        "warning": '<path d="M15 3L28 26H2zm-2 8v8h4v-8zm0 10v4h4v-4z"/>',
+    }
+    path = paths.get(kind, paths["warning"])
     return (
         '<div class="impact-osm-icon">'
         '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">'
-        f'<circle cx="15" cy="15" r="12" fill="white" stroke="{color}" stroke-width="3"/>'
-        f'<text x="15" y="19" text-anchor="middle" font-size="10" font-weight="700" fill="{color}">'
-        f"{safe_label}</text></svg></div>"
+        f'<circle cx="15" cy="15" r="13" fill="white" stroke="{color}" stroke-width="2"/>'
+        f'<g fill="{color}">{path}</g></svg></div>'
     )
 
 

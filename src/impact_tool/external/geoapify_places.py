@@ -85,6 +85,7 @@ def fetch_places(
     api_key: str | None = None,
     session: requests.Session | None = None,
     limit: int = 500,
+    max_pages: int = 4,
 ) -> ExternalResult:
     key = api_key if api_key is not None else os.getenv("GEOAPIFY_API_KEY", "")
     if not key:
@@ -95,21 +96,40 @@ def fetch_places(
     started = perf_counter()
     client = session or build_session()
     try:
-        payload = request_json(
-            client,
-            "GET",
-            PLACES_ENDPOINT,
-            params={
-                "categories": ",".join(categories),
-                "filter": filter_value,
-                "limit": min(max(limit, 1), 1000),
-                "apiKey": key,
-            },
+        page_size = min(max(limit, 1), 500)
+        features: list[dict[str, Any]] = []
+        pages = 0
+        truncated = False
+        for page in range(max(1, max_pages)):
+            payload = request_json(
+                client,
+                "GET",
+                PLACES_ENDPOINT,
+                params={
+                    "categories": ",".join(categories),
+                    "filter": filter_value,
+                    "limit": page_size,
+                    "offset": page * page_size,
+                    "apiKey": key,
+                },
+            )
+            page_features = list(payload.get("features", []))
+            features.extend(page_features)
+            pages += 1
+            if len(page_features) < page_size:
+                break
+        else:
+            truncated = True
+        normalized = normalize_places(
+            {"type": "FeatureCollection", "features": features}
         )
-        normalized = normalize_places(payload)
+        normalized["metadata"] = {
+            "page_count": pages,
+            "truncated": truncated,
+        }
         warning = ""
         completeness = "complet"
-        if payload.get("features") and not normalized["features"]:
+        if features and not normalized["features"]:
             warning = "Răspunsul Geoapify nu a conținut puncte utilizabile."
             completeness = "posibil incomplet"
         return ExternalResult.success(
@@ -117,7 +137,11 @@ def fetch_places(
             source="Geoapify Places",
             duration_seconds=perf_counter() - started,
             completeness=completeness,
-            warning=warning,
+            warning=warning or (
+                "Rezultatele Geoapify au fost plafonate la numărul maxim de pagini."
+                if truncated
+                else ""
+            ),
         )
     except Exception as error:
         return ExternalResult.failure(

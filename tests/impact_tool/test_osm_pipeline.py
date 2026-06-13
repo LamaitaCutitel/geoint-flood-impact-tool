@@ -235,6 +235,24 @@ def test_exposure_direct_and_buffer() -> None:
     assert result["buffer_meters"] == 100
 
 
+def test_unexposed_important_facilities_remain_displayable() -> None:
+    water = {"type": "Point", "coordinates": [27.5, 45.5]}
+    layers = {
+        "osm_critical": {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"name": "Școală", "amenity": "school"},
+                    "geometry": {"type": "Point", "coordinates": [27.7, 45.7]},
+                }
+            ],
+        }
+    }
+    result = classify_osm_impact(layers, water, 100)
+    assert len(result["layers"]["osm_critical"]["display_features"]) == 1
+
+
 def test_partial_lengths_and_building_overlap() -> None:
     water = {
         "type": "Polygon",

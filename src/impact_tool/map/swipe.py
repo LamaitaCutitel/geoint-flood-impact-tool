@@ -34,39 +34,59 @@ class SarSwipeControl(MacroElement):
         (function () {
           var map = {{ this._parent.get_name() }};
           var config = {{ this.config_json }};
-          map.createPane('impactSwipeBefore');
-          map.createPane('impactSwipeAfter');
+          if (!config.before || !config.after) return;
+          if (!map.getPane('impactSwipeBefore')) map.createPane('impactSwipeBefore');
+          if (!map.getPane('impactSwipeAfter')) map.createPane('impactSwipeAfter');
           var beforePane = map.getPane('impactSwipeBefore');
           var afterPane = map.getPane('impactSwipeAfter');
           beforePane.style.zIndex = 410;
           afterPane.style.zIndex = 420;
 
-          L.tileLayer(config.before, {
+          if (map._impactSarSwipe) map._impactSarSwipe.remove();
+          var beforeLayer = L.tileLayer(config.before, {
             attribution:'Google Earth Engine', pane:'impactSwipeBefore'
           }).addTo(map);
-          L.tileLayer(config.after, {
+          var afterLayer = L.tileLayer(config.after, {
             attribution:'Google Earth Engine', pane:'impactSwipeAfter'
           }).addTo(map);
 
           var container = map.getContainer();
+          container.querySelectorAll(
+            '.impact-sar-swipe-divider,.impact-sar-swipe-label'
+          ).forEach(function (element) { element.remove(); });
           var divider = L.DomUtil.create('div', 'impact-swipe-divider', container);
+          divider.classList.add('impact-sar-swipe-divider');
           divider.setAttribute('aria-label', 'Comparatie BEFORE AFTER');
           divider.setAttribute('role', 'separator');
           var beforeLabel = L.DomUtil.create('div', 'impact-swipe-label', container);
           var afterLabel = L.DomUtil.create('div', 'impact-swipe-label', container);
+          beforeLabel.classList.add('impact-sar-swipe-label');
+          afterLabel.classList.add('impact-sar-swipe-label');
           beforeLabel.innerHTML = 'BEFORE';
           afterLabel.innerHTML = 'AFTER';
           beforeLabel.style.left = '12px';
           afterLabel.style.right = '12px';
+          var splitPercent = 50;
+          var errorMessage = L.DomUtil.create(
+            'div', 'impact-swipe-label impact-sar-swipe-label', container
+          );
+          errorMessage.style.display = 'none';
+          errorMessage.style.left = '50%';
+          errorMessage.style.transform = 'translateX(-50%)';
+          errorMessage.style.top = '48px';
+          errorMessage.innerHTML = 'Imaginea nu a putut fi încărcată.';
 
           function update(clientX) {
             var bounds = container.getBoundingClientRect();
-            var percent = Math.max(
+            splitPercent = Math.max(
               0,
               Math.min(100, ((clientX - bounds.left) / bounds.width) * 100)
             );
-            afterPane.style.clipPath = 'inset(0 0 0 ' + percent + '%)';
-            divider.style.left = 'calc(' + percent + '% - 2px)';
+            syncClip();
+          }
+          function syncClip() {
+            afterPane.style.clipPath = 'inset(0 0 0 ' + splitPercent + '%)';
+            divider.style.left = 'calc(' + splitPercent + '% - 2px)';
           }
           function move(event) {
             var point = event.touches ? event.touches[0] : event;
@@ -89,7 +109,22 @@ class SarSwipeControl(MacroElement):
           divider.addEventListener('mousedown', start);
           divider.addEventListener('touchstart', start, {passive:false});
           L.DomEvent.disableClickPropagation(divider);
-          update(container.getBoundingClientRect().left + map.getSize().x / 2);
+          [beforeLayer, afterLayer].forEach(function (layer) {
+            layer.on('tileerror', function () { errorMessage.style.display = 'block'; });
+          });
+          map.on('resize zoomend moveend', syncClip);
+          map._impactSarSwipe = {
+            remove: function () {
+              map.off('resize zoomend moveend', syncClip);
+              map.removeLayer(beforeLayer);
+              map.removeLayer(afterLayer);
+              [divider, beforeLabel, afterLabel, errorMessage].forEach(
+                function (element) { if (element) element.remove(); }
+              );
+              afterPane.style.clipPath = '';
+            }
+          };
+          syncClip();
         })();
         {% endmacro %}
         """
@@ -179,14 +214,21 @@ class LayerCompareControl(MacroElement):
               currentLayers = [];
               if (divider) { divider.remove(); divider = null; }
               map.getPane(rightPaneName).style.clipPath = '';
+              map.off('resize zoomend moveend', syncComparison);
+            }
+            var splitPercent = 50;
+            function syncComparison() {
+              if (!divider) return;
+              map.getPane(rightPaneName).style.clipPath =
+                'inset(0 0 0 ' + splitPercent + '%)';
+              divider.style.left = 'calc(' + splitPercent + '% - 2px)';
             }
             function update(clientX) {
               if (!divider) return;
               var container = map.getContainer();
               var bounds = container.getBoundingClientRect();
-              var percent = Math.max(0, Math.min(100, ((clientX - bounds.left) / bounds.width) * 100));
-              map.getPane(rightPaneName).style.clipPath = 'inset(0 0 0 ' + percent + '%)';
-              divider.style.left = 'calc(' + percent + '% - 2px)';
+              splitPercent = Math.max(0, Math.min(100, ((clientX - bounds.left) / bounds.width) * 100));
+              syncComparison();
             }
             function activateComparison() {
               clearComparison();
@@ -231,7 +273,8 @@ class LayerCompareControl(MacroElement):
               }
               divider.addEventListener('mousedown', start);
               divider.addEventListener('touchstart', start, {passive:false});
-              update(container.getBoundingClientRect().left + map.getSize().x / 2);
+              map.on('resize zoomend moveend', syncComparison);
+              syncComparison();
             }
             button.onclick = function () {
               panel.style.display = panel.style.display === 'block' ? 'none' : 'block';

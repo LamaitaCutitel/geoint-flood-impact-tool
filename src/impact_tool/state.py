@@ -89,6 +89,7 @@ def reset_analysis_results(state: ImpactToolState) -> None:
     state.analysis_progress = 0
     state.timings.clear()
     state.analysis_stage = "Pregătit pentru analiză"
+    state.map_data_revision += 1
 
 
 def reset_area_dependent_state(state: ImpactToolState) -> None:
@@ -176,6 +177,7 @@ def set_county(
         state.area_warnings.clear()
         state.area_errors.clear()
         reset_area_dependent_state(state)
+        state.map_fit_bounds_requested = True
     _set_active_area_metadata(state, state.active_geometry)
     return changed
 
@@ -192,6 +194,7 @@ def set_aoi(state: ImpactToolState, geometry: dict | None) -> bool:
     state.aoi_geometry = metadata.geometry
     state.draw_requested = False
     reset_area_dependent_state(state)
+    state.map_fit_bounds_requested = True
     _apply_metadata(state, metadata)
     return True
 
@@ -204,6 +207,7 @@ def clear_aoi(state: ImpactToolState) -> bool:
     state.area_warnings.clear()
     state.area_errors.clear()
     reset_area_dependent_state(state)
+    state.map_fit_bounds_requested = True
     _set_active_area_metadata(state, state.county_geometry)
     return True
 

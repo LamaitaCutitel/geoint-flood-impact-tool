@@ -12,9 +12,9 @@ APP_SUBTITLE = "Analiză multisursă SAR, Dynamic World și OpenStreetMap"
 
 TAB_NAMES = (
     "Hartă",
-    "Rezumat impact",
-    "Dynamic World",
-    "Elemente OSM",
+    "Rezumat",
+    "Elemente expuse",
+    "Detalii tehnice",
     "Raport",
 )
 
@@ -53,6 +53,8 @@ class ImpactToolState:
     scene_errors: list[str] = field(default_factory=list)
     scene_warnings: list[str] = field(default_factory=list)
     scene_query: dict = field(default_factory=dict)
+    scene_search_polarization: str = "VH"
+    scene_search_orbit_pass: str = "BOTH"
     scene_gallery_limit: int = 8
     scene_current_id: str = ""
     preview_scene_id: str = ""
@@ -118,6 +120,10 @@ class ImpactToolState:
     critical_mode: bool = False
     presentation_mode: bool = False
     map_focus: list[float] = field(default_factory=list)
+    map_center: list[float] = field(default_factory=lambda: [45.9432, 24.9668])
+    map_zoom: int = 6
+    map_fit_bounds_requested: bool = True
+    map_data_revision: int = 0
     preset_name: str = ""
     preset_cache_status: dict[str, dict] = field(default_factory=dict)
     event_date: str = ""

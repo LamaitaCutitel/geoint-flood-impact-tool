@@ -28,9 +28,9 @@ def _new_tool_source() -> str:
 def test_shell_declares_required_tabs_and_layer_groups():
     assert TAB_NAMES == (
         "Hartă",
-        "Rezumat impact",
-        "Dynamic World",
-        "Elemente OSM",
+        "Rezumat",
+        "Elemente expuse",
+        "Detalii tehnice",
         "Raport",
     )
     assert LAYER_GROUPS == (
@@ -74,7 +74,7 @@ def test_shell_contains_required_controls():
     assert "Buffer în jurul apei noi" in source
     assert "Desenează zonă focală" in source
     assert "Șterge AOI și revino la județ" in source
-    assert "Rulează analiza SAR" in source
+    assert "Rulează analiza completă" in source
     assert "Încarcă obiective importante" in source
     assert "Analizează impactul OSM" in source
     assert "Rulează / Reîncearcă Dynamic World" in source
@@ -118,7 +118,19 @@ def test_shell_has_single_leaflet_draw_control_and_no_analysis_layers():
     assert "DynamicCompareControl" not in source
 
 
-def test_layer_controls_are_processed_before_map_render():
+def test_visibility_is_managed_by_leaflet_not_streamlit():
     source = (PROJECT_ROOT / "src/impact_tool/ui/shell.py").read_text(encoding="utf-8")
 
-    assert source.index("_render_layer_controls(st, state)") < source.index("st_folium(")
+    assert "_render_layer_controls" not in source
+    assert "_render_osm_map_filters" not in source
+    assert '"layers": sorted(state.active_layers)' not in source
+    assert '"osm_filters": state.osm_filters' not in source
+
+
+def test_map_state_fields_exist():
+    state = ImpactToolState()
+
+    assert state.map_center == [45.9432, 24.9668]
+    assert state.map_zoom == 6
+    assert state.map_fit_bounds_requested is True
+    assert state.map_data_revision == 0

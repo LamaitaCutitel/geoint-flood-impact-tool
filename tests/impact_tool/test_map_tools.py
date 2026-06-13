@@ -28,15 +28,15 @@ def test_optional_maptiler_context_is_a_hidden_attributed_tile_layer() -> None:
         "Galati",
         building_context_tile="https://tiles.example/{z}/{x}/{y}.png?key=test",
     ).get_root().render()
-    assert "Cl\\u0103diri OSM \\u2014 context jude\\u021bean" in html
+    assert "Context cartografic MapTiler Streets" in html
     assert "MapTiler, OpenStreetMap contributors" in html
     assert "FeatureCollection" not in html
 
 
 def test_important_facility_icons_cover_normalized_categories() -> None:
-    assert _icon_kind({"category": "hospital"}, "osm_critical") == "H"
-    assert _icon_kind({"category": "shelter"}, "osm_critical") == "A"
-    assert _icon_kind({"category": "power_substation"}, "osm_critical") == "E"
+    assert _icon_kind({"category": "hospital"}, "osm_critical") == "medical"
+    assert _icon_kind({"category": "shelter"}, "osm_critical") == "shelter"
+    assert _icon_kind({"category": "power_substation"}, "osm_critical") == "power"
 
 
 def test_thematic_compare_tool_is_visible_and_has_presets() -> None:
@@ -214,7 +214,7 @@ def test_focus_uses_single_set_view_at_zoom_17() -> None:
     assert html.count("setView([45.5, 27.5], 17)") == 1
 
 
-def test_map_render_key_changes_for_buffer_filters_and_focus() -> None:
+def test_map_render_key_ignores_leaflet_visibility_and_tracks_real_changes() -> None:
     state = ImpactToolState(active_area_hash="area")
     initial = _map_render_key(state)
     state.buffer_meters = 500
@@ -222,7 +222,9 @@ def test_map_render_key_changes_for_buffer_filters_and_focus() -> None:
     state.osm_filters["roads"] = False
     changed_filter = _map_render_key(state)
     changed_focus = _map_render_key(state, [45.5, 27.5])
-    assert len({initial, changed_buffer, changed_filter, changed_focus}) == 4
+    assert initial != changed_buffer
+    assert changed_buffer == changed_filter
+    assert changed_filter != changed_focus
 
 
 def test_critical_mode_filters_secondary_layers() -> None:
@@ -313,7 +315,7 @@ def test_osm_tooltip_uses_only_fields_available_on_all_features() -> None:
     assert "Distanță până la apă" not in html
 
 
-def test_only_selected_analysis_layers_are_sent_to_map() -> None:
+def test_all_analysis_layers_are_sent_to_leaflet_control() -> None:
     state = ImpactToolState(
         active_layers=["sar_new_water"],
         analysis_results={
@@ -327,7 +329,11 @@ def test_only_selected_analysis_layers_are_sent_to_map() -> None:
         },
     )
     layers = _analysis_layers(state)
-    assert [layer["id"] for layer in layers] == ["sar_new_water"]
+    assert [layer["id"] for layer in layers] == [
+        "sar_water_before",
+        "sar_water_after",
+        "sar_new_water",
+    ]
 
 
 def test_county_click_resolves_feature_for_selection_and_zoom() -> None:
@@ -351,16 +357,15 @@ def test_county_click_resolves_feature_for_selection_and_zoom() -> None:
     assert _county_feature_from_click(counties, "Brăila") is None
 
 
-def test_osm_filters_render_before_map_build() -> None:
+def test_streamlit_layer_filters_are_removed() -> None:
     from pathlib import Path
 
     source = Path("src/impact_tool/ui/shell.py").read_text(encoding="utf-8")
-    assert source.index("_render_layer_controls(st, state)") < source.index(
-        "impact_map = build_shell_map("
-    )
+    assert "_render_layer_controls" not in source
+    assert "_render_osm_map_filters" not in source
 
 
-def test_no_analysis_tiles_are_sent_when_all_layers_are_disabled() -> None:
+def test_leaflet_receives_layers_independent_of_legacy_active_layers() -> None:
     state = ImpactToolState(
         active_layers=[],
         analysis_results={
@@ -378,7 +383,7 @@ def test_no_analysis_tiles_are_sent_when_all_layers_are_disabled() -> None:
             },
         },
     )
-    assert _analysis_layers(state) == []
+    assert _analysis_layers(state)
 
 
 def test_critical_asset_has_one_clustered_svg_marker() -> None:
@@ -435,7 +440,8 @@ def test_bridge_has_line_and_centroid_icon() -> None:
     html = folium_map.get_root().render()
     assert "LineString" in html
     assert html.count("L.marker(") == 1
-    assert "pod" in html
+    assert 'd=\\"M4 20h22v4H4' in html
+    assert "<text" not in html
 
 
 def test_reference_buildings_render_only_at_large_zoom() -> None:
@@ -460,7 +466,7 @@ def test_reference_buildings_render_only_at_large_zoom() -> None:
     assert "getZoom() >= 14" in html
 
 
-def test_reference_filter_and_presentation_mode() -> None:
+def test_osm_layers_ignore_legacy_streamlit_visibility_state() -> None:
     from src.impact_tool.ui.shell import _visible_osm_layers
 
     state = ImpactToolState(
@@ -501,7 +507,7 @@ def test_reference_filter_and_presentation_mode() -> None:
         },
     )
     visible = _visible_osm_layers(state)
-    assert visible["osm_buildings"]["features"] == []
+    assert len(visible["osm_buildings"]["features"]) == 1
     assert len(visible["osm_critical"]["features"]) == 1
 
 
@@ -510,8 +516,8 @@ def test_osm_ui_contains_zoom_completeness_and_hidden_qa() -> None:
 
     results_source = Path("src/impact_tool/ui/results.py").read_text(encoding="utf-8")
     shell_source = Path("src/impact_tool/ui/shell.py").read_text(encoding="utf-8")
-    assert "Mod prezentare" in results_source
-    assert "Clădiri de referință" in shell_source
-    assert 'button("Zoom"' in results_source
+    assert "_render_osm_map_filters" not in shell_source
+    assert "Centrează elementul selectat" in results_source
+    assert 'button("Zoom"' not in results_source
     assert "completitudine" in results_source
     assert 'expander("Mod QA", expanded=False)' in results_source

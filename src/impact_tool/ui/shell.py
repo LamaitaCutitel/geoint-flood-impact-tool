@@ -14,6 +14,7 @@ from src.app_support.county_boundaries import (
 from src.impact_tool.aoi import geometry_from_drawing
 from src.impact_tool.analysis import (
     execute_analysis,
+    execute_complete_analysis,
     execute_dynamic_world,
     execute_important_features,
     execute_sar_qa,
@@ -23,7 +24,7 @@ from src.impact_tool.analysis import (
 from src.impact_tool.dynamic_world import dynamic_world_layer_definitions
 from src.impact_tool.external.maptiler import county_buildings_context
 from src.impact_tool.map.builder import build_shell_map
-from src.impact_tool.models import APP_SUBTITLE, APP_TITLE, LAYER_GROUPS
+from src.impact_tool.models import APP_SUBTITLE, APP_TITLE
 from src.impact_tool.osm_impact import visible_impact_layers
 from src.impact_tool.report import (
     generate_cached_report,
@@ -95,15 +96,13 @@ def render_app(st_module: Any | None = None) -> None:
             progress_bar.progress(percent, text=stage)
             status_box.info(stage)
 
-        success = execute_analysis(
+        success = execute_complete_analysis(
             state,
             progress_callback=update_progress,
-            load_osm=False,
-            mode=state.analysis_mode,
         )
         if success:
             status_box.success(
-                "Analiza SAR a fost finalizată. Etapele externe pot fi rulate separat."
+                "Analiza completă s-a încheiat. Rezultatele disponibile sunt păstrate."
             )
         else:
             status_box.error(state.analysis_error or "Analiza nu a putut fi finalizată.")
@@ -158,14 +157,9 @@ def render_app(st_module: Any | None = None) -> None:
         st.warning(warning)
 
     building_context = county_buildings_context()
-    map_column, layers_column = st.columns([4.7, 1.3], gap="small")
-    with layers_column:
-        st.markdown('<div class="layers-title">Layere</div>', unsafe_allow_html=True)
-        if not building_context.status.ok:
-            st.caption(building_context.status.warning)
-        _render_layer_controls(st, state)
-
-    with map_column:
+    if not building_context.status.ok:
+        st.caption(building_context.status.warning)
+    with st.container():
         from streamlit_folium import st_folium
 
         focus_location = list(state.map_focus)
@@ -199,6 +193,9 @@ def render_app(st_module: Any | None = None) -> None:
                 else None
             ),
             focus_location=focus_location,
+            map_center=state.map_center,
+            map_zoom=state.map_zoom,
+            fit_bounds_requested=state.map_fit_bounds_requested,
         )
         record_timing(state, "hartă", perf_counter() - map_started)
         map_data = st_folium(
@@ -209,9 +206,21 @@ def render_app(st_module: Any | None = None) -> None:
                 "last_active_drawing",
                 "all_drawings",
                 "last_object_clicked_tooltip",
+                "center",
+                "zoom",
             ],
             key=_map_render_key(state, focus_location),
         )
+        returned_center = (map_data or {}).get("center")
+        if isinstance(returned_center, dict):
+            state.map_center = [
+                float(returned_center.get("lat", state.map_center[0])),
+                float(returned_center.get("lng", state.map_center[1])),
+            ]
+        returned_zoom = (map_data or {}).get("zoom")
+        if returned_zoom is not None:
+            state.map_zoom = int(returned_zoom)
+        state.map_fit_bounds_requested = False
         if focus_location:
             state.map_focus = []
         drawing = geometry_from_drawing((map_data or {}).get("last_active_drawing"))
@@ -237,7 +246,6 @@ def _map_render_key(state: Any, focus_location: list[float] | None = None) -> st
         "county": state.county_name,
         "area": state.active_area_hash or "county",
         "analysis": state.analysis_hash or "empty",
-        "layers": sorted(state.active_layers),
         "buffer": state.buffer_meters,
         "preview_scene": state.preview_scene_id,
         "preview_tile": state.preview_scene_tile,
@@ -247,9 +255,7 @@ def _map_render_key(state: Any, focus_location: list[float] | None = None) -> st
         "layer_compare": state.layer_compare_active,
         "layer_compare_left": state.layer_compare_left_id,
         "layer_compare_right": state.layer_compare_right_id,
-        "osm_filters": state.osm_filters,
-        "critical_mode": state.critical_mode,
-        "presentation_mode": state.presentation_mode,
+        "data_revision": state.map_data_revision,
         "focus": focus_location or [],
     }
     digest = hashlib.sha256(
@@ -268,11 +274,7 @@ def _analysis_layers(state: Any) -> list[dict[str, Any]]:
         layers.extend(
             dynamic_world_layer_definitions(state.analysis_results["dynamic_world"])
         )
-    return [
-        layer
-        for layer in layers
-        if layer["id"] in state.active_layers
-    ]
+    return layers
 
 
 def _comparison_layers(state: Any) -> dict[str, dict[str, str]]:
@@ -315,121 +317,21 @@ def _visible_osm_layers(state: Any) -> dict[str, dict[str, Any]]:
     impact = state.analysis_results.get("osm_impact")
     if not impact:
         return {}
-    visible = visible_impact_layers(
+    return visible_impact_layers(
         impact,
-        state.osm_filters,
-        state.critical_mode,
-    )
-    selected = {
-        layer_id: layer
-        for layer_id, layer in visible.items()
-        if layer_id in state.active_layers
-    }
-    if not state.presentation_mode:
-        return selected
-    return {
-        layer_id: {
-            **layer,
-            "features": [
-                feature
-                for feature in layer.get("features", [])
-                if feature.get("properties", {}).get("infrastructure_level")
-                in {"esențial", "important"}
-            ],
-        }
-        for layer_id, layer in selected.items()
-    }
-
-
-def _grouped_layer_definitions(state: Any) -> dict[str, list[dict[str, Any]]]:
-    groups = {group: [] for group in LAYER_GROUPS}
-    sar = state.analysis_results.get("sar")
-    if sar:
-        groups["Analiză SAR"] = sar_layer_definitions(sar)
-        if state.analysis_results.get("sar_qa"):
-            groups["Analiză SAR"].extend(
-                sar_qa_layer_definitions(state.analysis_results["sar_qa"])
-            )
-    dynamic = state.analysis_results.get("dynamic_world")
-    if dynamic:
-        definitions = dynamic_world_layer_definitions(dynamic)
-        groups["Dynamic World"] = definitions[:4]
-        groups["Corelare multisursă"] = definitions[4:]
-    impact = state.analysis_results.get("osm_impact")
-    if impact:
-        names = {
-            "osm_buildings": "Clădiri potențial expuse",
-            "osm_roads": "Drumuri potențial expuse",
-            "osm_railways": "Căi ferate intersectate",
-            "osm_bridges": "Poduri intersectate",
-            "osm_critical": "Obiective critice potențial expuse",
-        }
-        groups["Impact OSM"] = [
-            {"id": layer_id, "name": names.get(layer_id, layer_id)}
-            for layer_id in impact.get("layers", {})
-        ]
-    return groups
-
-
-def _render_layer_controls(st: Any, state: Any) -> None:
-    groups = _grouped_layer_definitions(state)
-    any_layers = False
-    for group in LAYER_GROUPS:
-        with st.expander(group, expanded=True):
-            definitions = groups.get(group, [])
-            if group == "Impact OSM" and state.analysis_results.get("osm_impact"):
-                definitions = [
-                    {"id": "buffer", "name": "Buffer de avertizare"},
-                    *definitions,
-                ]
-            if not definitions:
-                st.caption("Niciun strat disponibil în etapa curentă.")
-                continue
-            any_layers = True
-            for layer in definitions:
-                layer_id = layer["id"]
-                selected = st.checkbox(
-                    layer["name"],
-                    value=layer_id in state.active_layers,
-                    key=f"impact-layer-{state.analysis_hash or 'empty'}-{layer_id}",
-                )
-                if selected and layer_id not in state.active_layers:
-                    state.active_layers.append(layer_id)
-                elif not selected and layer_id in state.active_layers:
-                    state.active_layers.remove(layer_id)
-    if state.analysis_results.get("osm_impact"):
-        _render_osm_map_filters(st, state)
-    if any_layers:
-        st.caption("Harta încarcă numai layerele bifate.")
-
-
-def _render_osm_map_filters(st: Any, state: Any) -> None:
-    st.markdown("##### Filtre OSM")
-    labels = {
-        "buildings": "Clădiri",
-        "roads": "Drumuri",
-        "railways": "Căi ferate",
-        "bridges": "Poduri",
-        "critical": "Obiective critice",
-        "reference_buildings": "Clădiri de referință",
-    }
-    for key, label in labels.items():
-        state.osm_filters[key] = st.checkbox(
-            label,
-            value=state.osm_filters.get(key, True),
-            key=f"osm_map_filter_{key}",
-        )
-    state.critical_mode = st.toggle(
-        "Doar impact critic",
-        value=state.critical_mode,
-        key="osm_map_critical_mode",
-        help="Păstrează apa nouă SAR, bufferul, drumurile, podurile și obiectivele critice.",
+        {
+            "buildings": True,
+            "roads": True,
+            "railways": True,
+            "bridges": True,
+            "critical": True,
+            "reference_buildings": True,
+        },
+        False,
     )
 
 
 def _selected_buffer_geometry(state: Any) -> dict[str, Any] | None:
-    if "buffer" not in state.active_layers:
-        return None
     return (state.analysis_results.get("osm_impact") or {}).get("buffer_geometry")
 
 

@@ -15,6 +15,7 @@ from src.gee.gee_auth import initialize_earth_engine
 from src.gee.sentinel1_collection import build_aoi_from_geometry
 from src.gee.sentinel1_scene_explorer import search_sentinel1_scenes_result
 from src.impact_tool.cache import PersistentCache
+from src.impact_tool.analysis import recalculate_osm_impact
 from src.impact_tool.models import BUFFER_MAX_METERS, BUFFER_MIN_METERS, ImpactToolState
 from src.impact_tool.presets import GALATI_PRESET_NAME, apply_galati_preset
 from src.impact_tool.sar import recommended_sar_threshold
@@ -72,18 +73,6 @@ def render_sidebar(st: Any, state: ImpactToolState) -> tuple[dict | None, list[s
                 feature_bbox(galati_feature),
             )
             st.rerun()
-        if state.preset_name == GALATI_PRESET_NAME:
-            cache_states = {
-                item.get("status", "lipsă")
-                for item in state.preset_cache_status.values()
-            }
-            if cache_states == {"valid"}:
-                st.success("Cache Galați pregătit pentru rulare rapidă")
-            else:
-                st.warning(
-                    "Cache Galați: "
-                    + ", ".join(sorted(cache_states or {"lipsă"}))
-                )
         selected_index = counties.index(state.county_name) if state.county_name in counties else 0
         selected_county = st.selectbox(
             "Județ",
@@ -144,29 +133,64 @@ def render_sidebar(st: Any, state: ImpactToolState) -> tuple[dict | None, list[s
 
         _render_scene_selection(st, state)
 
-        selected_buffer = st.slider(
-            "Buffer în jurul apei noi",
-            min_value=BUFFER_MIN_METERS,
-            max_value=BUFFER_MAX_METERS,
-            value=state.buffer_meters,
-            step=1,
-            help="Distanța de avertizare pentru evaluarea elementelor potențial expuse.",
-        )
-        update_buffer(state, selected_buffer)
+        if state.analysis_results.get("osm_raw"):
+            with st.form("osm_buffer_form"):
+                selected_buffer = st.slider(
+                    "Buffer avertizare",
+                    min_value=BUFFER_MIN_METERS,
+                    max_value=BUFFER_MAX_METERS,
+                    value=state.buffer_meters,
+                    step=1,
+                    help="Distanța de avertizare pentru elementele potențial expuse.",
+                )
+                apply_buffer = st.form_submit_button(
+                    "Aplică și recalculează impactul OSM",
+                    use_container_width=True,
+                )
+            if apply_buffer and update_buffer(state, selected_buffer):
+                recalculate_osm_impact(state)
+                st.rerun()
+        else:
+            selected_buffer = st.slider(
+                "Buffer în jurul apei noi",
+                min_value=BUFFER_MIN_METERS,
+                max_value=BUFFER_MAX_METERS,
+                value=state.buffer_meters,
+                step=1,
+                help="Distanța de avertizare pentru evaluarea elementelor potențial expuse.",
+            )
+            update_buffer(state, selected_buffer)
 
-        run_sar = st.button(
-            "Rulează analiza SAR",
+        run_complete = st.button(
+            "Rulează analiza completă",
             type="primary",
             use_container_width=True,
             disabled=not state.can_run_analysis,
-            help="Rulează numai comparația strictă Sentinel-1 SAR BEFORE / AFTER.",
-            key="run_sar_analysis",
+            help=(
+                "Rulează SAR strict BEFORE / AFTER, Dynamic World și impactul OSM. "
+                "Etapele opționale nu șterg rezultatul SAR dacă devin indisponibile."
+            ),
+            key="run_complete_analysis",
         )
-        if run_sar:
-            state.analysis_mode = "sar"
+        if run_complete:
+            state.analysis_mode = "rapid"
             state.run_requested = True
 
-        with st.expander("Parametri SAR avansați", expanded=False):
+        with st.expander("Opțiuni avansate", expanded=False):
+            state.scene_search_polarization = st.selectbox(
+                "Polarizare",
+                ["VH", "VV"],
+                index=["VH", "VV"].index(state.scene_search_polarization),
+                help="Polarizarea folosită la următoarea căutare Sentinel-1.",
+            )
+            state.scene_search_orbit_pass = st.selectbox(
+                "Orbit pass",
+                ["BOTH", "ASCENDING", "DESCENDING"],
+                index=["BOTH", "ASCENDING", "DESCENDING"].index(
+                    state.scene_search_orbit_pass
+                ),
+                help="Direcția orbitei folosită la următoarea căutare.",
+            )
             polarization_for_threshold = (
                 (state.before_scene or {}).get("polarization")
                 or state.scene_query.get("polarization")
@@ -327,21 +351,8 @@ def _render_scene_selection(st: Any, state: ImpactToolState) -> None:
         value=end_value,
         key=end_key,
     )
-    polarization_options = ["VH", "VV"]
-    polarization_key = f"impact_scene_polarization{preset_suffix}"
-    polarization_value = st.session_state.pop(polarization_key, "VH")
-    polarization = st.selectbox(
-        "Polarizare",
-        polarization_options,
-        index=polarization_options.index(polarization_value),
-        key=polarization_key,
-        help="Polarizarea radar utilizată pentru ambele scene.",
-    )
-    orbit_pass = st.selectbox(
-        "Orbit pass",
-        ["BOTH", "ASCENDING", "DESCENDING"],
-        help="Direcția orbitei Sentinel-1.",
-    )
+    polarization = state.scene_search_polarization
+    orbit_pass = state.scene_search_orbit_pass
     if st.button("Caută scene Sentinel-1", use_container_width=True):
         gee = initialize_earth_engine()
         if not gee.available or gee.ee is None:

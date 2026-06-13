@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+import hashlib
+import json
 from time import perf_counter
 from typing import Any
 
@@ -15,7 +17,12 @@ from src.impact_tool.dynamic_world import (
 from src.impact_tool.models import ImpactToolState
 from src.app_support.osm_impact import build_osm_geojson_layers
 from src.impact_tool.external.geoapify_places import fetch_important_facilities
-from src.impact_tool.external.overpass_targeted import fetch_targeted_impact
+from src.impact_tool.external.models import ExternalResult
+from src.impact_tool.external.overpass_targeted import (
+    fetch_targeted_impact,
+    run_targeted_query,
+)
+from src.impact_tool.osm import build_category_query
 from src.impact_tool.osm_impact import classify_osm_impact
 from src.impact_tool.sar import SarParameters, run_sar_analysis
 from src.impact_tool.sar_qa import run_sar_threshold_sweep
@@ -23,6 +30,52 @@ from src.impact_tool.state import invalidate_report, record_timing, reset_compar
 
 
 ProgressCallback = Callable[[int, str], None]
+
+
+def execute_complete_analysis(
+    state: ImpactToolState,
+    progress_callback: ProgressCallback | None = None,
+) -> bool:
+    """Run the demonstrable workflow while preserving partial optional results."""
+
+    def stage(percent: int, message: str) -> None:
+        _progress(state, progress_callback, percent, message)
+
+    sar_ok = execute_analysis(
+        state,
+        progress_callback=lambda percent, message: stage(
+            min(50, max(5, int(percent * 0.5))),
+            message,
+        ),
+        load_osm=False,
+        mode=state.analysis_mode,
+    )
+    if not sar_ok:
+        return False
+
+    stage(55, "Analiză Dynamic World")
+    if not execute_dynamic_world(state):
+        state.cache_events.append(
+            "Avertisment: Dynamic World este indisponibil; analiza SAR continuă."
+        )
+
+    stage(68, "Încărcare obiective importante")
+    if not execute_important_features(state):
+        state.cache_events.append(
+            "Avertisment: obiectivele importante sunt indisponibile momentan."
+        )
+
+    stage(78, "Interogare OSM țintită și clasificare impact")
+    if not execute_osm_loading(state, progress_callback=progress_callback):
+        state.cache_events.append(
+            "Avertisment: impactul OSM este indisponibil; rezultatele raster rămân active."
+        )
+
+    state.analysis_results["workflow_status"] = (
+        "complet" if state.osm_impact_available else "parțial"
+    )
+    stage(100, "Analiza completă s-a încheiat")
+    return True
 
 
 def execute_analysis(
@@ -98,6 +151,7 @@ def execute_analysis(
             {**state.analysis_parameters, "analysis_mode": state.analysis_mode},
         )
         state.analysis_complete = True
+        state.map_data_revision += 1
         state.active_layers = ["sar_new_water", "buffer"]
         state.osm_impact_available = False
         state.analysis_results["workflow_status"] = "sar_reușit"
@@ -151,6 +205,7 @@ def execute_dynamic_world(
         result["duration_seconds"] = round(perf_counter() - started, 3)
         result["source"] = "Google Dynamic World V1 prin Google Earth Engine"
         state.analysis_results["dynamic_world"] = result
+        state.map_data_revision += 1
         if result.get("status") == "reușit":
             if "dynamic_world_new_water" not in state.active_layers:
                 state.active_layers.append("dynamic_world_new_water")
@@ -265,16 +320,30 @@ def execute_osm_loading(
         category_results = result.data.get("categories", {})
         state.osm_status = {
             category: {
-                "ok": result.status.ok,
+                "ok": result.data.get("metadata", {})
+                .get("category_status", {})
+                .get(category, {})
+                .get("ok", result.status.ok),
                 "source": result.status.source,
                 "completeness": result.status.completeness,
                 "duration_seconds": result.status.duration_seconds,
                 "warnings": [result.status.warning] if result.status.warning else [],
-                "count": len(elements),
+                "raw_elements": len(elements),
                 "last_run": datetime.now(UTC).isoformat(),
             }
             for category, elements in category_results.items()
         }
+        category_layers = {
+            "buildings": "osm_buildings",
+            "roads": "osm_roads",
+            "railways": "osm_railways",
+            "bridges": "osm_bridges",
+        }
+        for category, layer_id in category_layers.items():
+            if category in state.osm_status:
+                state.osm_status[category]["parsed_features"] = len(
+                    layers.get(layer_id, {}).get("features", [])
+                )
         state.external_api_status["overpass"] = {
             "ok": result.status.ok,
             "source": result.status.source,
@@ -291,6 +360,15 @@ def execute_osm_loading(
             "Clasificare impact OSM direct și în buffer",
         )
         impact_ready = recalculate_osm_impact(state)
+        if impact_ready:
+            for category, layer_id in category_layers.items():
+                if category in state.osm_status:
+                    state.osm_status[category]["display_features"] = len(
+                        state.analysis_results["osm_impact"]
+                        .get("layers", {})
+                        .get(layer_id, {})
+                        .get("display_features", [])
+                    )
         if not impact_ready:
             state.analysis_results["osm_load_status"] = "impact_osm_indisponibil"
         state.osm_impact_available = impact_ready
@@ -357,7 +435,7 @@ def recalculate_osm_impact(state: ImpactToolState) -> bool:
         water_geometry,
         state.buffer_meters,
         active_geometry=state.active_geometry,
-        projection_cache_key="",
+        projection_cache_key=_projection_cache_key(water_geometry, raw),
     )
     compact_layers = {}
     for layer_id, collection in impact.get("layers", {}).items():
@@ -380,11 +458,25 @@ def recalculate_osm_impact(state: ImpactToolState) -> bool:
     metrics["important_features_direct"] = metrics.get("critical_direct", 0)
     metrics["important_features_buffer"] = metrics.get("critical_buffer", 0)
     state.osm_impact_available = True
+    state.map_data_revision += 1
     record_timing(state, "impact OSM", perf_counter() - impact_started)
     state.cache_events.append(
         f"Impactul OSM a fost recalculat pentru bufferul de {state.buffer_meters} m."
     )
     return True
+
+
+def _projection_cache_key(
+    water_geometry: dict[str, Any],
+    raw_osm: dict[str, Any],
+) -> str:
+    payload = {
+        "water": water_geometry,
+        "revision": raw_osm.get("metadata", {}),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def execute_important_features(state: ImpactToolState) -> bool:
@@ -394,6 +486,10 @@ def execute_important_features(state: ImpactToolState) -> bool:
     west, south, east, north = state.active_area_bbox
     result = fetch_important_facilities(
         filter_value=f"rect:{west},{south},{east},{north}",
+        fallback=lambda: _overpass_important_fallback(
+            [west, south, east, north],
+            state.analysis_mode,
+        ),
     )
     state.external_api_status["important_features"] = {
         "ok": result.status.ok,
@@ -407,6 +503,31 @@ def execute_important_features(state: ImpactToolState) -> bool:
     state.important_features_requested = False
     record_timing(state, "obiective importante", result.status.duration_seconds)
     return result.status.ok
+
+
+def _overpass_important_fallback(
+    bbox: list[float],
+    analysis_mode: str,
+) -> ExternalResult:
+    query = build_category_query(
+        bbox,
+        "critical",
+        analysis_mode=analysis_mode,
+    )
+    raw = run_targeted_query(query)
+    if not raw.status.ok:
+        return raw
+    layers = build_osm_geojson_layers((raw.data or {}).get("elements", []))
+    return ExternalResult.success(
+        layers.get(
+            "osm_critical",
+            {"type": "FeatureCollection", "features": []},
+        ),
+        source=raw.status.source,
+        duration_seconds=raw.status.duration_seconds,
+        completeness=raw.status.completeness,
+        warning=raw.status.warning,
+    )
 
 
 def _progress(

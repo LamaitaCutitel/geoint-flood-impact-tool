@@ -298,7 +298,10 @@ def visible_impact_layers(
         features = [
             feature
             for feature in source_features
-            if feature.get("properties", {}).get("status") != STATUS_UNEXPOSED
+            if (
+                layer_id == "osm_critical"
+                or feature.get("properties", {}).get("status") != STATUS_UNEXPOSED
+            )
             and (
                 filters.get("reference_buildings", True)
                 or feature.get("properties", {}).get("status") != STATUS_REFERENCE
@@ -322,6 +325,9 @@ def _attach_display_features(
             in {STATUS_DIRECT, STATUS_BUFFER}
         ]
         if layer_id != "osm_buildings":
+            if layer_id == "osm_critical":
+                collection["display_features"] = analysis_features
+                continue
             if layer_id in {"osm_roads", "osm_railways"}:
                 collection["display_features"] = _linear_display_features(affected)
             else:

@@ -8,6 +8,7 @@ from src.impact_tool.external.overpass_targeted import (
     deduplicate_elements,
     fetch_targeted_impact,
     targeted_bboxes,
+    targeted_query_plan,
 )
 
 
@@ -34,6 +35,29 @@ def test_category_query_uses_only_reduced_bbox():
     assert '["building"]' in query
     assert "45.3,27.4,45.5,27.6" in query
     assert "area[" not in query
+
+
+def test_component_aware_plan_records_query_metadata():
+    geometry = {
+        "type": "MultiPolygon",
+        "coordinates": [
+            WATER["coordinates"],
+            [[[27.7, 45.7], [27.72, 45.7], [27.72, 45.72], [27.7, 45.72], [27.7, 45.7]]],
+        ],
+    }
+    plan = targeted_query_plan(geometry, 250, max_tiles=4)
+    assert plan["component_count"] == 2
+    assert 1 <= plan["query_box_count"] <= 4
+    assert plan["covered_area_km2"] > 0
+    assert plan["discarded_small_components"] >= 0
+
+
+def test_targeted_roads_use_operational_classes():
+    query = build_targeted_query("roads", [27.4, 45.3, 27.6, 45.5], 100)
+    assert "motorway" in query
+    assert "residential" in query
+    assert "service" in query
+    assert 'way["highway"](' not in query
 
 
 def test_dedup_uses_stable_type_and_id():
@@ -71,6 +95,8 @@ def test_partial_timeout_keeps_loaded_categories():
     assert result.status.completeness == "posibil incomplet"
     assert result.data["categories"]["roads"]
     assert result.data["categories"]["buildings"] == []
+    assert result.data["metadata"]["category_status"]["buildings"]["ok"] is False
+    assert result.data["metadata"]["category_status"]["roads"]["ok"] is True
 
 
 def test_hard_cap_truncates_without_crashing():

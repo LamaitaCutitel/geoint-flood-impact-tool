@@ -9,6 +9,11 @@ from src.impact_tool.external.geoapify_places import (
     normalize_places,
 )
 from src.impact_tool.external.http import build_session, configured_timeout
+from src.impact_tool.external.geoapify_geometry import (
+    GEOMETRY_ENDPOINT,
+    buffer_geometry,
+    simplify_geometry,
+)
 from src.impact_tool.external.maptiler import county_buildings_context
 from src.impact_tool.external.overpass_targeted import run_targeted_query
 
@@ -56,6 +61,7 @@ def test_maptiler_context_uses_raster_tiles_only():
     assert result.status.ok
     assert ".png" in result.data["tile_url"]
     assert ".pbf" not in result.data["tile_url"]
+    assert result.status.source == "Context cartografic MapTiler Streets"
 
 
 def test_geoapify_places_is_normalized_and_mocked():
@@ -70,6 +76,55 @@ def test_geoapify_places_is_normalized_and_mocked():
     assert result.status.source == "Geoapify Places"
     assert result.data["features"] == []
     assert "secret-value" not in result.status.warning
+    assert session.calls[0][2]["params"]["offset"] == 0
+    assert session.calls[0][2]["params"]["limit"] <= 500
+
+
+def test_geoapify_places_pages_and_deduplicates():
+    feature = {
+        "type": "Feature",
+        "properties": {"place_id": "same", "categories": ["service.police"]},
+        "geometry": {"type": "Point", "coordinates": [28.1, 45.6]},
+    }
+    session = FakeSession(
+        [
+            {"type": "FeatureCollection", "features": [feature]},
+            {"type": "FeatureCollection", "features": []},
+        ]
+    )
+    result = fetch_places(
+        categories=["service.police"],
+        filter_value="rect:1,2,3,4",
+        api_key="secret",
+        session=session,
+        limit=1,
+        max_pages=3,
+    )
+    assert len(result.data["features"]) == 1
+    assert result.data["metadata"]["page_count"] == 2
+    assert session.calls[1][2]["params"]["offset"] == 1
+
+
+def test_geoapify_geometry_endpoint_and_typed_payloads():
+    assert GEOMETRY_ENDPOINT.endswith("/v1/geometry/operation")
+    geometry = {"type": "Point", "coordinates": [27.5, 45.5]}
+    session = FakeSession(
+        [
+            {"type": "geojson", "data": geometry},
+            {"type": "geojson", "data": geometry},
+        ]
+    )
+    assert simplify_geometry(
+        geometry, 0.1, api_key="secret", session=session
+    ).status.ok
+    assert buffer_geometry(
+        geometry, 250, api_key="secret", session=session
+    ).status.ok
+    simplify_payload = session.calls[0][2]["json"]
+    buffer_payload = session.calls[1][2]["json"]
+    assert simplify_payload["params"]["tolerance"] == 0.1
+    assert buffer_payload["distance"] == 250
+    assert buffer_payload["params"]["units"] == "meters"
 
 
 def test_geoapify_categories_and_duplicate_ids_are_normalized():

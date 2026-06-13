@@ -21,10 +21,16 @@ def render_result_tabs(st: Any, state: ImpactToolState) -> None:
                 if state.timings:
                     st.json(state.timings, expanded=False)
     with tabs[1]:
-        _render_sar_summary(st, state)
+        _render_summary(st, state)
     with tabs[2]:
-        _render_dynamic_world(st, state)
+        impact = state.analysis_results.get("osm_impact")
+        if impact:
+            _render_priority_table(st, state, impact)
+        else:
+            st.info("Elementele expuse vor fi disponibile după analiza OSM.")
     with tabs[3]:
+        _render_sar_summary(st, state)
+        _render_dynamic_world(st, state)
         _render_osm(st, state)
     with tabs[4]:
         st.info("Raportul final devine disponibil după finalizarea analizei.")
@@ -50,6 +56,94 @@ def render_result_tabs(st: Any, state: ImpactToolState) -> None:
             st.success("Pachetul tehnic al rulării a fost exportat.")
             for label, path in paths.items():
                 st.caption(f"{label}: {path}")
+
+
+def _render_summary(st: Any, state: ImpactToolState) -> None:
+    sar = state.analysis_results.get("sar") or {}
+    sar_metrics = sar.get("metrics", {})
+    dynamic = state.analysis_results.get("dynamic_world") or {}
+    dynamic_metrics = dynamic.get("metric_values", {})
+    impact = state.analysis_results.get("osm_impact") or {}
+    osm_metrics = impact.get("metrics", {})
+    primary = (
+        ("Apă nouă evidențiată SAR", _metric_value(sar_metrics.get("sar_new_water_area_km2")), "km²"),
+        (
+            "Suprapunere SAR × Dynamic World",
+            dynamic_metrics.get("sar_dynamic_world_new_water_overlap_area_km2"),
+            "km²",
+        ),
+        ("Clădiri direct intersectate", osm_metrics.get("buildings_direct"), ""),
+        ("Clădiri în buffer", osm_metrics.get("buildings_buffer"), ""),
+        (
+            "Drumuri afectate",
+            float(osm_metrics.get("roads_direct_km") or 0)
+            + float(osm_metrics.get("roads_buffer_km") or 0),
+            "km",
+        ),
+        (
+            "Obiective importante direct / buffer",
+            f"{osm_metrics.get('critical_direct', 0)} / {osm_metrics.get('critical_buffer', 0)}",
+            "",
+        ),
+    )
+    for start in range(0, len(primary), 3):
+        columns = st.columns(3)
+        for column, (label, value, unit) in zip(columns, primary[start : start + 3]):
+            if value is None:
+                column.metric(label, "indisponibil")
+            elif isinstance(value, str):
+                column.metric(label, value)
+            elif unit:
+                column.metric(label, f"{float(value):.3f} {unit}")
+            else:
+                column.metric(label, str(int(value)))
+
+    with st.expander("Indicatori secundari", expanded=False):
+        st.write(
+            {
+                "Apă BEFORE (km²)": _metric_value(
+                    sar_metrics.get("sar_water_before_area_km2")
+                ),
+                "Apă AFTER (km²)": _metric_value(
+                    sar_metrics.get("sar_water_after_area_km2")
+                ),
+                "Căi ferate direct (km)": osm_metrics.get("railways_direct_km"),
+                "Poduri direct": osm_metrics.get("bridges_direct"),
+                "Completitudine OSM": _osm_completeness(state.osm_status),
+                "Timpi (s)": state.timings,
+            }
+        )
+
+    st.markdown("#### Calitatea datelor")
+    quality = st.columns(4)
+    quality[0].caption("SAR: disponibil" if sar else "SAR: indisponibil")
+    quality[1].caption(
+        "Dynamic World: disponibil"
+        if dynamic.get("status") == "reușit"
+        else "Dynamic World: avertisment"
+    )
+    important = state.external_api_status.get("important_features", {})
+    quality[2].caption(
+        "Obiective: " + str(important.get("source") or "indisponibil")
+    )
+    quality[3].caption(
+        "OSM țintit: " + _osm_completeness(state.osm_status)
+    )
+
+
+def _metric_value(metric: Any) -> float | None:
+    if isinstance(metric, dict):
+        if metric.get("status") != "reușit":
+            return None
+        metric = metric.get("value")
+    return float(metric) if metric is not None else None
+
+
+def _osm_completeness(statuses: dict[str, dict[str, Any]]) -> str:
+    if not statuses:
+        return "indisponibil"
+    values = {status.get("completeness") for status in statuses.values()}
+    return "complet" if values == {"complet"} else "parțial"
 
 
 def _render_sar_summary(st: Any, state: ImpactToolState) -> None:
@@ -255,13 +349,6 @@ def _render_osm(st: Any, state: ImpactToolState) -> None:
     if overpass_status.get("warning"):
         st.warning(overpass_status["warning"])
     st.info(f"Sursa OSM: {_osm_source_label(state.osm_status)}")
-    state.presentation_mode = st.toggle(
-        "Mod prezentare",
-        value=state.presentation_mode,
-        help="Păstrează pe hartă infrastructura esențială și importantă.",
-        key="osm_presentation_mode",
-    )
-    st.caption("Filtrele de vizibilitate OSM sunt în coloana de layere a hărții.")
     for category, status in state.osm_status.items():
         if status.get("ok"):
             st.caption(
@@ -271,7 +358,8 @@ def _render_osm(st: Any, state: ImpactToolState) -> None:
                 f"durată: {float(status.get('duration_seconds') or 0):.2f} s"
             )
             st.success(
-                f"{category}: {status.get('count', 0)} obiecte · {status.get('source')}"
+                f"{category}: {status.get('display_features', status.get('parsed_features', 0))} "
+                f"obiecte afișate · {status.get('source')}"
             )
             for warning in status.get("warnings", []):
                 st.warning(warning)
@@ -292,7 +380,6 @@ def _render_osm(st: Any, state: ImpactToolState) -> None:
                 use_container_width=True,
                 hide_index=True,
             )
-        _render_priority_table(st, state, impact)
         with st.expander("Mod QA", expanded=False):
             st.caption("Informații tehnice pentru verificarea implementării.")
             st.json(
@@ -377,17 +464,17 @@ def _render_priority_table(st: Any, state: ImpactToolState, impact: dict[str, An
     priority = {"esențial": 0, "important": 1, "context tehnic": 2}
     filter_label = st.selectbox(
         "Filtru elemente",
-        ["toate", "doar direct", "doar buffer", "doar importante"],
+        ["Toate expuse", "Direct", "Buffer", "Obiective importante"],
         key="osm_result_filter",
     )
-    if filter_label == "doar direct":
+    if filter_label == "Direct":
         rows = [row for row in rows if "direct" in row["status"].lower()]
-    elif filter_label == "doar buffer":
+    elif filter_label == "Buffer":
         rows = [row for row in rows if "buffer" in row["status"].lower()]
-    elif filter_label == "doar importante":
+    elif filter_label == "Obiective importante":
         rows = [
             row for row in rows
-            if row["level"] in {"esențial", "important"}
+            if row["category"] == "Obiectiv critic"
         ]
     rows.sort(
         key=lambda row: (
@@ -395,33 +482,34 @@ def _render_priority_table(st: Any, state: ImpactToolState, impact: dict[str, An
             row["distance_to_water_m"],
         )
     )
-    st.markdown("#### Elemente prioritare")
+    st.markdown("#### Elemente potențial expuse")
     st.dataframe(
         [
             {
-                key: row[key]
-                for key in (
-                    "name",
-                    "category",
-                    "status",
-                    "distance_to_water_m",
-                    "locality",
-                    "source",
-                )
+                "Nume": row["name"],
+                "Tip": row["category"],
+                "Expunere": row["status"],
+                "Distanță până la apă": row["distance_to_water_m"],
+                "Localitate": row["locality"],
+                "Sursă": row["source"],
             }
             for row in rows[:250]
         ],
         use_container_width=True,
         hide_index=True,
     )
-    for index, row in enumerate(rows[:25]):
-        columns = st.columns([2.2, 1.4, 1.5, 1.1, 0.7])
-        columns[0].write(row["name"])
-        columns[1].write(row["category"])
-        columns[2].write(row["status"])
-        columns[3].write(f'{row["distance_to_water_m"]} m')
-        if columns[4].button("Zoom", key=f"osm_zoom_{index}"):
-            state.map_focus = row["coordinates"]
+    if rows:
+        labels = {
+            f"{row['name']} · {row['category']} · {index + 1}": row
+            for index, row in enumerate(rows[:250])
+        }
+        selected = st.selectbox(
+            "Element pentru centrare",
+            list(labels),
+            key="osm_selected_feature",
+        )
+        if st.button("Centrează elementul selectat", key="osm_center_selected"):
+            state.map_focus = labels[selected]["coordinates"]
             st.rerun()
 
 

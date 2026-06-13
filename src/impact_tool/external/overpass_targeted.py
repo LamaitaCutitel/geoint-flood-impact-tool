@@ -6,8 +6,8 @@ from typing import Any, Callable
 
 import requests
 from pyproj import Transformer
-from shapely.geometry import shape
-from shapely.ops import transform
+from shapely.geometry import box, shape
+from shapely.ops import transform, unary_union
 
 from src.impact_tool.external.http import build_session, request_json, romanian_http_error
 from src.impact_tool.external.models import ExternalResult
@@ -21,6 +21,7 @@ CATEGORY_LIMITS = {
     "bridges": 1000,
 }
 HARD_ELEMENT_CAP = 12000
+MIN_COMPONENT_AREA_M2 = 1000
 
 
 def configured_endpoints() -> list[str]:
@@ -69,26 +70,52 @@ def targeted_bboxes(
     *,
     max_tiles: int = 4,
 ) -> list[list[float]]:
+    return targeted_query_plan(
+        water_geometry,
+        buffer_meters,
+        max_tiles=max_tiles,
+    )["boxes"]
+
+
+def targeted_query_plan(
+    water_geometry: dict[str, Any],
+    buffer_meters: int,
+    *,
+    max_tiles: int = 4,
+) -> dict[str, Any]:
     if not water_geometry:
         raise ValueError("Geometria apei SAR este obligatorie pentru interogarea OSM.")
     if not 1 <= buffer_meters <= 1000:
         raise ValueError("Bufferul trebuie să fie între 1 și 1000 m.")
     forward = Transformer.from_crs("EPSG:4326", "EPSG:3035", always_xy=True)
     reverse = Transformer.from_crs("EPSG:3035", "EPSG:4326", always_xy=True)
-    water = transform(forward.transform, shape(water_geometry)).simplify(10)
-    target = transform(reverse.transform, water.buffer(buffer_meters))
-    west, south, east, north = target.bounds
-    bbox = [west, south, east, north]
-    if max_tiles <= 1 or max(east - west, north - south) <= 0.2:
-        return [bbox]
-    middle_x = (west + east) / 2
-    middle_y = (south + north) / 2
-    return [
-        [west, south, middle_x, middle_y],
-        [middle_x, south, east, middle_y],
-        [west, middle_y, middle_x, north],
-        [middle_x, middle_y, east, north],
-    ][:max_tiles]
+    water = transform(forward.transform, shape(water_geometry))
+    if not water.is_valid:
+        water = water.buffer(0)
+    water = water.simplify(10, preserve_topology=True)
+    components = list(water.geoms) if hasattr(water, "geoms") else [water]
+    significant = [
+        component
+        for component in components
+        if not component.is_empty and component.area >= MIN_COMPONENT_AREA_M2
+    ]
+    if not significant:
+        significant = [water]
+    significant.sort(key=lambda geometry: geometry.area, reverse=True)
+    buffered = [component.buffer(buffer_meters) for component in significant]
+    merged_boxes = unary_union([box(*geometry.bounds) for geometry in buffered])
+    merged = list(merged_boxes.geoms) if hasattr(merged_boxes, "geoms") else [merged_boxes]
+    merged.sort(key=lambda geometry: geometry.area, reverse=True)
+    selected = merged[: max(1, max_tiles)]
+    geographic = [transform(reverse.transform, geometry) for geometry in selected]
+    boxes = [[*geometry.bounds] for geometry in geographic]
+    return {
+        "boxes": boxes,
+        "component_count": len(components),
+        "query_box_count": len(boxes),
+        "covered_area_km2": round(sum(item.area for item in selected) / 1_000_000, 3),
+        "discarded_small_components": len(components) - len(significant),
+    }
 
 
 def build_targeted_query(category: str, bbox: list[float], limit: int) -> str:
@@ -98,7 +125,10 @@ def build_targeted_query(category: str, bbox: list[float], limit: int) -> str:
     area = f"{south},{west},{north},{east}"
     selectors = {
         "buildings": f'nwr["building"]({area});',
-        "roads": f'way["highway"]({area});',
+        "roads": (
+            'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|'
+            f'residential|service|unclassified|.*_link)$"]({area});'
+        ),
         "railways": f'way["railway"]({area});',
         "bridges": (
             f'nwr["bridge"]({area});'
@@ -135,12 +165,14 @@ def fetch_targeted_impact(
     max_tiles: int = 4,
 ) -> ExternalResult:
     started = perf_counter()
-    boxes = targeted_bboxes(water_geometry, buffer_meters, max_tiles=max_tiles)
+    plan = targeted_query_plan(water_geometry, buffer_meters, max_tiles=max_tiles)
+    boxes = plan["boxes"]
     category_data: dict[str, list[dict[str, Any]]] = {}
     errors: list[str] = []
     duplicate_count = 0
     truncated = False
     total = 0
+    category_status: dict[str, dict[str, Any]] = {}
     for category in categories:
         collected: list[dict[str, Any]] = []
         per_tile_limit = max(1, CATEGORY_LIMITS[category] // len(boxes))
@@ -157,6 +189,16 @@ def fetch_targeted_impact(
             deduplicated = deduplicated[:remaining]
             truncated = True
         category_data[category] = deduplicated
+        category_errors = [
+            error for error in errors if error.startswith(f"{category}:")
+        ]
+        category_status[category] = {
+            "ok": not category_errors,
+            "raw_elements": len(collected),
+            "deduplicated_elements": len(deduplicated),
+            "truncated": len(deduplicated) >= remaining and len(collected) > remaining,
+            "warnings": category_errors,
+        }
         total += len(deduplicated)
         if total >= hard_cap:
             truncated = True
@@ -179,6 +221,8 @@ def fetch_targeted_impact(
                 "truncated": truncated,
                 "element_count": total,
                 "query_scope": "SAR new water + warning buffer",
+                "category_status": category_status,
+                **{key: value for key, value in plan.items() if key != "boxes"},
             },
         },
         source="Overpass API țintit",

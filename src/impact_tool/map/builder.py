@@ -64,6 +64,9 @@ def build_shell_map(
     osm_layers: dict[str, dict[str, Any]] | None = None,
     building_context_tile: str | None = None,
     focus_location: list[float] | None = None,
+    map_center: list[float] | None = None,
+    map_zoom: int | None = None,
+    fit_bounds_requested: bool = True,
 ) -> folium.Map:
     selected_feature = (
         selected_county_feature(counties_geojson, selected_county)
@@ -71,11 +74,13 @@ def build_shell_map(
         else None
     )
     selected_bbox = feature_bbox(selected_feature) if selected_feature else None
-    center = bbox_center(selected_bbox) if selected_bbox else ROMANIA_CENTER
+    center = map_center or (
+        bbox_center(selected_bbox) if selected_bbox else ROMANIA_CENTER
+    )
 
     folium_map = folium.Map(
         location=center,
-        zoom_start=8 if selected_feature else 6,
+        zoom_start=map_zoom if map_zoom is not None else (8 if selected_feature else 6),
         tiles=None,
         control_scale=True,
         zoom_control=True,
@@ -91,7 +96,7 @@ def build_shell_map(
         folium.TileLayer(
             tiles=building_context_tile,
             attr="MapTiler, OpenStreetMap contributors",
-            name="Clădiri OSM — context județean",
+            name="Context cartografic MapTiler Streets",
             overlay=True,
             control=True,
             show=False,
@@ -116,7 +121,7 @@ def build_shell_map(
             attr="Google Earth Engine",
             name="Previzualizare scenă Sentinel-1",
             overlay=True,
-            control=False,
+            control=True,
             show=True,
         ).add_to(folium_map)
     add_tile_layers(folium_map, analysis_layers or [])
@@ -152,7 +157,7 @@ def build_shell_map(
             },
             edit_options={"edit": False, "remove": False},
         ).add_to(folium_map)
-    if selected_bbox:
+    if selected_bbox and fit_bounds_requested:
         folium_map.fit_bounds(
             [[selected_bbox[1], selected_bbox[0]], [selected_bbox[3], selected_bbox[2]]]
         )
@@ -193,5 +198,5 @@ def build_shell_map(
     if focus_location and len(focus_location) == 2:
         latitude, longitude = focus_location
         FocusLocation(latitude, longitude).add_to(folium_map)
-    folium.LayerControl(collapsed=True, position="topright").add_to(folium_map)
+    folium.LayerControl(collapsed=False, position="topright").add_to(folium_map)
     return folium_map
