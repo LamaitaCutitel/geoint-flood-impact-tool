@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv312/
+
+# Local configuration and secrets
+.env
+*.pem
+*.key
+*.json.secret
+
+# Generated cache and outputs
+cache/
+data/cache/
+data/output/*
+!data/output/.gitkeep
+.codex-sprint-logs/
+export_review/
+
+# Large generated files
+*.tif
+*.tiff
+*.zip
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
