@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Clean imports
+        run: |
+          python -c "import impact_tool"
+          python -c "from src.impact_tool.ui.shell import render_app"
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Streamlit smoke test
+        shell: bash
+        run: |
+          python -m streamlit run impact_tool.py \
+            --server.headless true \
+            --server.address 127.0.0.1 \
+            --server.port 8510 > streamlit-ci.log 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8510/_stcore/health | grep -q ok; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat streamlit-ci.log
+          exit 1
